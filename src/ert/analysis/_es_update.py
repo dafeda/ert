@@ -24,6 +24,7 @@ import xarray as xr
 from iterative_ensemble_smoother.experimental import (
     ensemble_smoother_update_step_row_scaling,
 )
+from tqdm import tqdm
 
 from ert.config import Field, GenKwConfig, SurfaceConfig
 from ert.realization_state import RealizationState
@@ -381,6 +382,12 @@ def _load_observations_and_responses(
     )
 
 
+def _split_by_batchsize(
+    arr: npt.NDArray[np.int_], batch_size: int
+) -> List[npt.NDArray[np.int_]]:
+    return np.array_split(arr, int((arr.shape[0] / batch_size)) + 1)
+
+
 def analysis_ES(
     updatestep: "UpdateConfiguration",
     obs: EnkfObs,
@@ -399,9 +406,13 @@ def analysis_ES(
     iens_active_index = [i for i in range(len(ens_mask)) if ens_mask[i]]
 
     progress_callback(Progress(Task("Loading data", 1, 3), None))
+    start = time.time()
     temp_storage = _create_temporary_parameter_storage(
         source_fs, ensemble_config, iens_active_index
     )
+    end = time.time()
+    elapsed = end - start
+    print(f"Time to run _create_temporary_parameter_storage: {elapsed}")
 
     ensemble_size = sum(ens_mask)
     param_ensemble = _param_ensemble_for_projection(
@@ -410,6 +421,8 @@ def analysis_ES(
 
     progress_callback(Progress(Task("Updating data", 2, 3), None))
     for update_step in updatestep:
+        print("Loading responses and observations...")
+        start = time.time()
         try:
             S, (
                 observation_values,
@@ -426,35 +439,108 @@ def analysis_ES(
             )
         except IndexError as e:
             raise ErtAnalysisError(e) from e
+        end = time.time()
+        elapsed = end - start
+        print(f"Time to run _load_observations_and_responses: {elapsed}")
 
         # pylint: disable=unsupported-assignment-operation
         smoother_snapshot.update_step_snapshots[update_step.name] = update_snapshot
-        if len(observation_values) == 0:
+
+        num_obs = len(observation_values)
+        if num_obs == 0:
             raise ErtAnalysisError(
                 f"No active observations for update step: {update_step.name}."
             )
 
-        noise = rng.standard_normal(size=(len(observation_values), S.shape[1]))
-
         smoother = ies.ES()
-        for parameter in update_step.parameters:
-            smoother.fit(
-                S,
-                observation_errors,
-                observation_values,
-                noise=noise,
-                truncation=module.get_truncation(),
-                inversion=ies.InversionType(module.inversion),
-                param_ensemble=param_ensemble,
+        truncation = module.get_truncation()
+        noise = rng.standard_normal(size=(num_obs, ensemble_size))
+
+        if module.localization():
+            Y_prime = S - S.mean(axis=1, keepdims=True)
+            C_YY = Y_prime @ Y_prime.T / (ensemble_size - 1)
+            Sigma_Y = np.diag(np.sqrt(np.diag(C_YY)))
+            batch_size: int = 1000
+            correlation_threshold = module.localization_correlation_threshold(
+                ensemble_size
             )
-            if active_indices := parameter.index_list:
-                temp_storage[parameter.name][active_indices, :] = smoother.update(
-                    temp_storage[parameter.name][active_indices, :]
+            for parameter in update_step.parameters:
+                num_params = temp_storage[parameter.name].shape[0]
+
+                print(
+                    (
+                        f"Running localization on {num_params} parameters,",
+                        f"{num_obs} responses and {ensemble_size} realizations...",
+                    )
                 )
-            else:
-                temp_storage[parameter.name] = smoother.update(
-                    temp_storage[parameter.name]
+                batches = _split_by_batchsize(np.arange(0, num_params), batch_size)
+                for param_batch_idx in tqdm(batches):
+                    X_local = temp_storage[parameter.name][param_batch_idx, :]
+                    A = X_local - X_local.mean(axis=1, keepdims=True)
+                    C_AA = A @ A.T / (ensemble_size - 1)
+
+                    # State-measurement covariance matrix
+                    C_AY = A @ Y_prime.T / (ensemble_size - 1)
+                    Sigma_A = np.diag(np.sqrt(np.diag(C_AA)))
+
+                    # State-measurement correlation matrix
+                    c_AY = np.abs(
+                        np.linalg.inv(Sigma_A) @ C_AY @ np.linalg.inv(Sigma_Y)
+                    )
+                    c_bool = c_AY > correlation_threshold
+                    # Some parameters might be significantly correlated
+                    # to the exact same responses,
+                    # making up what we call a `parameter group``.
+                    # We want to call the update only once per such parameter group
+                    # to speed up computation.
+                    param_groups = np.unique(c_bool, axis=0)
+
+                    # Drop the parameter group that does not correlate to any responses.
+                    row_with_all_false = np.all(~param_groups, axis=1)
+                    param_groups = param_groups[~row_with_all_false]
+
+                    for grp in param_groups:
+                        # Find the rows matching the parameter group
+                        matching_rows = np.all(c_bool == grp, axis=1)
+                        # Get the indices of the matching rows
+                        row_indices = np.where(matching_rows)[0]
+                        X_chunk = temp_storage[parameter.name][param_batch_idx, :][
+                            row_indices, :
+                        ]
+                        S_chunk = S[grp, :]
+                        observation_errors_loc = observation_errors[grp]
+                        observation_values_loc = observation_values[grp]
+                        smoother.fit(
+                            S_chunk,
+                            observation_errors_loc,
+                            observation_values_loc,
+                            noise=noise[grp],
+                            truncation=truncation,
+                            inversion=ies.InversionType(module.inversion),
+                            param_ensemble=param_ensemble,
+                        )
+                        temp_storage[parameter.name][
+                            param_batch_idx[row_indices], :
+                        ] = smoother.update(X_chunk)
+        else:
+            for parameter in update_step.parameters:
+                smoother.fit(
+                    S,
+                    observation_errors,
+                    observation_values,
+                    noise=noise,
+                    truncation=truncation,
+                    inversion=ies.InversionType(module.inversion),
+                    param_ensemble=param_ensemble,
                 )
+                if active_indices := parameter.index_list:
+                    temp_storage[parameter.name][active_indices, :] = smoother.update(
+                        temp_storage[parameter.name][active_indices, :]
+                    )
+                else:
+                    temp_storage[parameter.name] = smoother.update(
+                        temp_storage[parameter.name]
+                    )
 
         if params_with_row_scaling := _get_params_with_row_scaling(
             temp_storage, update_step.row_scaling_parameters
@@ -477,6 +563,9 @@ def analysis_ES(
     _save_temp_storage_to_disk(
         target_fs, ensemble_config, temp_storage, iens_active_index
     )
+    end = time.time()
+    elapsed = end - start
+    print(f"Time to run _save_temporary_storage_to_disk: {elapsed}")
 
 
 def analysis_IES(
@@ -511,9 +600,10 @@ def analysis_IES(
     # Looping over local analysis update_step
     for update_step in updatestep:
         try:
-            S, (
+            Y, (
                 observation_values,
                 observation_errors,
+                _,
                 update_snapshot,
             ) = _load_observations_and_responses(
                 source_fs,
@@ -528,15 +618,17 @@ def analysis_IES(
             raise ErtAnalysisError(str(e)) from e
         # pylint: disable=unsupported-assignment-operation
         smoother_snapshot.update_step_snapshots[update_step.name] = update_snapshot
-        if len(observation_values) == 0:
+
+        num_obs = len(observation_values)
+        if num_obs == 0:
             raise ErtAnalysisError(
                 f"No active observations for update step: {update_step.name}."
             )
 
-        noise = rng.standard_normal(size=(len(observation_values), S.shape[1]))
+        noise = rng.standard_normal(size=(len(observation_values), Y.shape[1]))
         for parameter in update_step.parameters:
             iterative_ensemble_smoother.fit(
-                S,
+                Y,
                 observation_errors,
                 observation_values,
                 noise=noise,
