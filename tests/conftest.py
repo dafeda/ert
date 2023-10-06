@@ -100,6 +100,11 @@ def poly_case(setup_case):
 
 
 @pytest.fixture()
+def poly_loc_1_case(setup_case):
+    return EnKFMain(setup_case("poly_example", "poly_loc_1.ert"))
+
+
+@pytest.fixture()
 def snake_oil_case_storage(copy_snake_oil_case_storage, tmp_path, source_root):
     return EnKFMain(ErtConfig.from_file("snake_oil.ert"))
 
