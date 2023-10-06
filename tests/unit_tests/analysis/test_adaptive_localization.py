@@ -4,9 +4,9 @@ from uuid import UUID
 from ert.cli import model_factory
 
 
-def test_that_adaptive_localization_with_cutoff_1_equals_ensemble_prior(poly_case, storage):
-    #ert = poly_loc_1_case
-    ert = poly_case
+def test_that_adaptive_localization_with_cutoff_1_equals_ensemble_prior(poly_loc_1_case, storage):
+    ert = poly_loc_1_case
+    #ert = poly_case
     experiment_id = storage.create_experiment(
         parameters=ert.ensembleConfig().parameter_configuration
     )
