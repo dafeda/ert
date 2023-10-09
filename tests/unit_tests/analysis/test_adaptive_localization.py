@@ -1,28 +1,45 @@
-from argparse import Namespace
-from uuid import UUID
+from argparse import ArgumentParser
 
-from ert.cli import model_factory
+import numpy as np
+
+from ert import LibresFacade
+from ert.__main__ import ert_parser
+from ert.cli import ENSEMBLE_SMOOTHER_MODE
+from ert.cli.main import run_cli
+from ert.storage import open_storage
 
 
-def test_that_adaptive_localization_with_cutoff_1_equals_ensemble_prior(poly_loc_1_case, storage):
-    ert = poly_loc_1_case
-    #ert = poly_case
-    experiment_id = storage.create_experiment(
-        parameters=ert.ensembleConfig().parameter_configuration
+def test_that_adaptive_localization_with_cutoff_1_equals_ensemble_prior(copy_case):
+    copy_case("poly_loc_1")
+
+    parser = ArgumentParser(prog="test_main")
+    parsed = ert_parser(
+        parser,
+        [
+            ENSEMBLE_SMOOTHER_MODE,
+            "--current-case",
+            "default",
+            "--target-case",
+            "target",
+            "--realizations",
+            "1-50",
+            "poly_loc_1_case.ert",
+            "--port-range",
+            "1024-65535",
+        ],
     )
-    prior_ensemble = storage.create_ensemble(
-        experiment_id, name="prior", ensemble_size=5
+
+    run_cli(parsed)
+    facade = LibresFacade.from_config_file("poly_loc_1_case.ert")
+    with open_storage(facade.enspath) as storage:
+        default_fs = storage.get_ensemble_by_name("default")
+        df_default = facade.load_all_gen_kw_data(default_fs)
+        target_fs = storage.get_ensemble_by_name("target")
+        df_target = facade.load_all_gen_kw_data(target_fs)
+
+    # We expect that when cut-off is 1, the posterior is equal to prior
+    assert (
+        np.linalg.det(df_target.cov().to_numpy()) == np.linalg.det(df_default.cov().to_numpy())
     )
-    prior = ert.ensemble_context(prior_ensemble, [True, False, False, True, True], 0)
-    ert.sample_prior(prior.sim_fs, prior.active_realizations)
-    ens_config = ert.ensembleConfig()
-    args = Namespace(realizations=None, iter_num=1, current_case="default")
-    model = model_factory._setup_ensemble_experiment(
-        ert,
-        storage,
-        args,
-        UUID(int=0),
-    )
-    i = 10
 
 
