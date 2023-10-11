@@ -1,6 +1,7 @@
 from argparse import ArgumentParser
 
 import numpy as np
+import pytest
 
 from ert import LibresFacade
 from ert.__main__ import ert_parser
@@ -9,6 +10,7 @@ from ert.cli.main import run_cli
 from ert.storage import open_storage
 
 
+@pytest.mark.integration_test
 def test_that_adaptive_localization_with_cutoff_1_equals_ensemble_prior(copy_case):
     copy_case("poly_example")
 
@@ -18,9 +20,9 @@ def test_that_adaptive_localization_with_cutoff_1_equals_ensemble_prior(copy_cas
         [
             ENSEMBLE_SMOOTHER_MODE,
             "--current-case",
-            "default",
+            "prior_sample",
             "--target-case",
-            "target",
+            "posterior_sample",
             "--realizations",
             "1-50",
             "poly_loc_1.ert",
@@ -32,18 +34,21 @@ def test_that_adaptive_localization_with_cutoff_1_equals_ensemble_prior(copy_cas
     run_cli(parsed)
     facade = LibresFacade.from_config_file("poly_loc_1.ert")
     with open_storage(facade.enspath) as storage:
-        default_fs = storage.get_ensemble_by_name("default")
-        df_default = facade.load_all_gen_kw_data(default_fs)
-        target_fs = storage.get_ensemble_by_name("target")
-        df_target = facade.load_all_gen_kw_data(target_fs)
+        prior_ensemble_name = storage.get_ensemble_by_name("prior_sample")
+        prior_sample = facade.load_all_gen_kw_data(prior_ensemble_name)
+        posterior_ensemble_name = storage.get_ensemble_by_name("posterior_sample")
+        posterior_sample = facade.load_all_gen_kw_data(posterior_ensemble_name)
 
-    # We expect that when cut-off is 1, the posterior is equal to prior
-    assert (
-        np.linalg.det(df_target.cov().to_numpy()) == np.linalg.det(df_default.cov().to_numpy())
-    )
+    # Check prior and posterior samples are equal
+    assert np.array_equal(posterior_sample, prior_sample)
 
 
+@pytest.mark.integration_test
 def test_that_adaptive_localization_with_cutoff_0_equals_ESupdate(copy_case):
+    """
+    Note that "RANDOM_SEED" in poly_loc_0.ert and poly_no_loc.ert needs to be the same to obtain 
+    the same sample from the prior.
+    """
     copy_case("poly_example")
 
     parser = ArgumentParser(prog="test_main_0")
@@ -52,9 +57,9 @@ def test_that_adaptive_localization_with_cutoff_0_equals_ESupdate(copy_case):
         [
             ENSEMBLE_SMOOTHER_MODE,
             "--current-case",
-            "default_loc0",
+            "prior_sample_loc0",
             "--target-case",
-            "target_loc0",
+            "posterior_sample_loc0",
             "--realizations",
             "1-50",
             "poly_loc_0.ert",
@@ -66,8 +71,8 @@ def test_that_adaptive_localization_with_cutoff_0_equals_ESupdate(copy_case):
     run_cli(parsed_loc0)
     facade_loc0 = LibresFacade.from_config_file("poly_loc_0.ert")
     with open_storage(facade_loc0.enspath) as storage_loc0:
-        target_fs_loc0 = storage_loc0.get_ensemble_by_name("target_loc0")
-        posterior_loc0 = facade_loc0.load_all_gen_kw_data(target_fs_loc0)
+        posterior_ensemble_name_loc0 = storage_loc0.get_ensemble_by_name("posterior_sample_loc0")
+        posterior_sample_loc0 = facade_loc0.load_all_gen_kw_data(posterior_ensemble_name_loc0)
 
     parser_noloc = ArgumentParser(prog="test_main")
     parsed_noloc = ert_parser(
@@ -75,9 +80,9 @@ def test_that_adaptive_localization_with_cutoff_0_equals_ESupdate(copy_case):
         [
             ENSEMBLE_SMOOTHER_MODE,
             "--current-case",
-            "default_noloc",
+            "prior_sample_noloc",
             "--target-case",
-            "target_noloc",
+            "posterior_sample_noloc",
             "--realizations",
             "1-50",
             "poly_no_loc.ert",
@@ -89,10 +94,9 @@ def test_that_adaptive_localization_with_cutoff_0_equals_ESupdate(copy_case):
     run_cli(parsed_noloc)
     facade_noloc = LibresFacade.from_config_file("poly.ert")
     with open_storage(facade_noloc.enspath) as storage_noloc:
-        target_fs_noloc = storage_noloc.get_ensemble_by_name("target_noloc")
-        posterior_noloc = facade_noloc.load_all_gen_kw_data(target_fs_noloc)
+        posterior_ensemble_name_noloc = storage_noloc.get_ensemble_by_name("posterior_sample_noloc")
+        posterior_sample_noloc = facade_noloc.load_all_gen_kw_data(posterior_ensemble_name_noloc)
 
-    # We expect that when cut-off is 0, the posterior is equal to ES
-    assert (
-        np.linalg.det(posterior_loc0.cov().to_numpy()) == np.linalg.det(posterior_noloc.cov().to_numpy())
-    )
+    # Check posterior sample without adaptive localization and with cut-off 0 are equal
+    assert np.array_equal(posterior_sample_loc0, posterior_sample_noloc)
+
