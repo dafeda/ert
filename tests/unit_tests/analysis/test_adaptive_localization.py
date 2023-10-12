@@ -7,21 +7,23 @@ import pytest
 from ert.__main__ import ert_parser
 from ert.cli import ENSEMBLE_SMOOTHER_MODE
 from ert.cli.main import run_cli
+from ert.config import ErtConfig
 from ert.storage import open_storage
-
-from src.ert.config import ErtConfig
 
 
 def run_cli_ES_with_case(poly_config):
+    config_name = poly_config.split(".")[0]
+    prior_sample_name = "prior_sample"+"_"+config_name
+    posterior_sample_name = "posterior_sample"+"_"+config_name
     parser = ArgumentParser(prog="test_main")
     parsed = ert_parser(
         parser,
         [
             ENSEMBLE_SMOOTHER_MODE,
             "--current-case",
-            "prior_sample"+poly_config,
+            prior_sample_name,
             "--target-case",
-            "posterior_sample"+poly_config,
+            posterior_sample_name,
             "--realizations",
             "1-50",
             poly_config,
@@ -29,39 +31,36 @@ def run_cli_ES_with_case(poly_config):
             "1024-65535",
         ],
     )
-
     run_cli(parsed)
     storage_path = ErtConfig.from_file(poly_config).ens_path
-
     #facade = LibresFacade.from_config_file(ert_config)
     with open_storage(storage_path) as storage:
-        prior_ensemble = storage.get_ensemble_by_name("prior_sample")
+        prior_ensemble = storage.get_ensemble_by_name(prior_sample_name)
         prior_sample = prior_ensemble.load_parameters("COEFFS")
-        posterior_ensemble = storage.get_ensemble_by_name("posterior_sample")
+        posterior_ensemble = storage.get_ensemble_by_name(posterior_sample_name)
         posterior_sample = posterior_ensemble.load_parameters("COEFFS")
-
     return prior_sample, posterior_sample
 
 
 @pytest.mark.integration_test
 def test_that_adaptive_localization_with_cutoff_1_equals_ensemble_prior(copy_case):
     copy_case("poly_example")
-    # random_seed_line = "RANDOM_SEED 1234"
-    # set_adaptive_localization = dedent(
-    #     """
-    #     ANALYSIS_SET_VAR STD_ENKF LOCALIZATION True
-    #     ANALYSIS_SET_VAR STD_ENKF LOCALIZATION_CORRELATION_THRESHOLD 1.0
-    #     """
-    # )
-    #
-    # with ("poly.ert", "r+") as f:
-    #     lines = f.readlines()
-    #     lines.insert(3, random_seed_line)
-    #     lines.insert(10, set_adaptive_localization)
-    #
-    # with open("poly_loc_1.ert", "w") as f:
-    #     f.writelines(lines)
-    prior_sample, posterior_sample = run_cli_ES_with_case("poly.ert")
+    random_seed_line = "RANDOM_SEED 1234\n\n"
+    set_adaptive_localization = dedent(
+        """
+        ANALYSIS_SET_VAR STD_ENKF LOCALIZATION True
+        ANALYSIS_SET_VAR STD_ENKF LOCALIZATION_CORRELATION_THRESHOLD 1.0
+        """
+    )
+
+    with open("poly.ert", "r+") as f:
+        lines = f.readlines()
+        lines.insert(2, random_seed_line)
+        lines.insert(10, set_adaptive_localization)
+
+    with open("poly_loc_1.ert", "w") as f:
+        f.writelines(lines)
+    prior_sample, posterior_sample = run_cli_ES_with_case("poly_loc_1.ert")
 
     # Check prior and posterior samples are equal
     assert np.array_equal(posterior_sample, prior_sample)
