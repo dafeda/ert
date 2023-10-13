@@ -13,8 +13,8 @@ from ert.storage import open_storage
 
 def run_cli_ES_with_case(poly_config):
     config_name = poly_config.split(".")[0]
-    prior_sample_name = "prior_sample"+"_"+config_name
-    posterior_sample_name = "posterior_sample"+"_"+config_name
+    prior_sample_name = "prior_sample" + "_" + config_name
+    posterior_sample_name = "posterior_sample" + "_" + config_name
     parser = ArgumentParser(prog="test_main")
     parsed = ert_parser(
         parser,
@@ -33,7 +33,6 @@ def run_cli_ES_with_case(poly_config):
     )
     run_cli(parsed)
     storage_path = ErtConfig.from_file(poly_config).ens_path
-    #facade = LibresFacade.from_config_file(ert_config)
     with open_storage(storage_path) as storage:
         prior_ensemble = storage.get_ensemble_by_name(prior_sample_name)
         prior_sample = prior_ensemble.load_parameters("COEFFS")
@@ -56,7 +55,7 @@ def test_that_adaptive_localization_with_cutoff_1_equals_ensemble_prior(copy_cas
     with open("poly.ert", "r+") as f:
         lines = f.readlines()
         lines.insert(2, random_seed_line)
-        lines.insert(10, set_adaptive_localization_1)
+        lines.insert(9, set_adaptive_localization_1)
 
     with open("poly_loc_1.ert", "w") as f:
         f.writelines(lines)
@@ -69,7 +68,7 @@ def test_that_adaptive_localization_with_cutoff_1_equals_ensemble_prior(copy_cas
 @pytest.mark.integration_test
 def test_that_adaptive_localization_with_cutoff_0_equals_ESupdate(copy_case):
     """
-    Note that "RANDOM_SEED" in poly_loc_0.ert and poly_no_loc.ert needs to be the same to obtain 
+    Note that "RANDOM_SEED" in poly_loc_0.ert and poly_no_loc.ert needs to be the same to obtain
     the same sample from the prior.
     """
     copy_case("poly_example")
@@ -89,7 +88,7 @@ def test_that_adaptive_localization_with_cutoff_0_equals_ESupdate(copy_case):
     with open("poly_no_loc.ert", "w") as f:
         f.writelines(lines)
 
-    lines.insert(10, set_adaptive_localization_0)
+    lines.insert(9, set_adaptive_localization_0)
 
     with open("poly_loc_0.ert", "w") as f:
         f.writelines(lines)
@@ -99,4 +98,3 @@ def test_that_adaptive_localization_with_cutoff_0_equals_ESupdate(copy_case):
 
     # Check posterior sample without adaptive localization and with cut-off 0 are equal
     assert np.array_equal(posterior_sample_loc0, posterior_sample_noloc)
-
