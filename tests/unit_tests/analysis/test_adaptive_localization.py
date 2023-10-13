@@ -46,7 +46,7 @@ def run_cli_ES_with_case(poly_config):
 def test_that_adaptive_localization_with_cutoff_1_equals_ensemble_prior(copy_case):
     copy_case("poly_example")
     random_seed_line = "RANDOM_SEED 1234\n\n"
-    set_adaptive_localization = dedent(
+    set_adaptive_localization_1 = dedent(
         """
         ANALYSIS_SET_VAR STD_ENKF LOCALIZATION True
         ANALYSIS_SET_VAR STD_ENKF LOCALIZATION_CORRELATION_THRESHOLD 1.0
@@ -56,7 +56,7 @@ def test_that_adaptive_localization_with_cutoff_1_equals_ensemble_prior(copy_cas
     with open("poly.ert", "r+") as f:
         lines = f.readlines()
         lines.insert(2, random_seed_line)
-        lines.insert(10, set_adaptive_localization)
+        lines.insert(10, set_adaptive_localization_1)
 
     with open("poly_loc_1.ert", "w") as f:
         f.writelines(lines)
@@ -73,6 +73,26 @@ def test_that_adaptive_localization_with_cutoff_0_equals_ESupdate(copy_case):
     the same sample from the prior.
     """
     copy_case("poly_example")
+
+    random_seed_line = "RANDOM_SEED 1234\n\n"
+    set_adaptive_localization_0 = dedent(
+        """
+        ANALYSIS_SET_VAR STD_ENKF LOCALIZATION True
+        ANALYSIS_SET_VAR STD_ENKF LOCALIZATION_CORRELATION_THRESHOLD 0.0
+        """
+    )
+
+    with open("poly.ert", "r+") as f:
+        lines = f.readlines()
+        lines.insert(2, random_seed_line)
+
+    with open("poly_no_loc.ert", "w") as f:
+        f.writelines(lines)
+
+    lines.insert(10, set_adaptive_localization_0)
+
+    with open("poly_loc_0.ert", "w") as f:
+        f.writelines(lines)
 
     prior_sample_loc0, posterior_sample_loc0 = run_cli_ES_with_case("poly_loc_0.ert")
     prior_sample_noloc, posterior_sample_noloc = run_cli_ES_with_case("poly_no_loc.ert")
