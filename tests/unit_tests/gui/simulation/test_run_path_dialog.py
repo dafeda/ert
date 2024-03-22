@@ -24,13 +24,14 @@ def handle_run_path_dialog(gui: ErtMainWindow, qtbot: QtBot, delete_run_path: bo
     mb = gui.findChild(QMessageBox, "RUN_PATH_WARNING_BOX")
 
     if mb is not None:
-        assert mb
         assert isinstance(mb, QMessageBox)
 
         if delete_run_path:
             qtbot.mouseClick(mb.checkBox(), Qt.LeftButton)
 
-        qtbot.mouseClick(mb.buttons()[0], Qt.LeftButton)
+        # Always click "Yes" to run experiments.
+        yes_button = mb.button(QMessageBox.Yes)
+        qtbot.mouseClick(yes_button, Qt.LeftButton)
 
 
 @pytest.mark.usefixtures("using_scheduler")
