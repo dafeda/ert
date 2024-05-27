@@ -56,6 +56,14 @@ class MultipleDataAssimilation(BaseRunModel):
         self.es_settings = es_settings
         self.update_settings = update_settings
 
+        self.experiment = self._storage.create_experiment(
+            parameters=self.ert_config.ensemble_config.parameter_configuration,
+            observations=self.ert_config.observations,
+            responses=self.ert_config.ensemble_config.response_configuration,
+            simulation_arguments=self._simulation_arguments,
+            name=self._simulation_arguments.experiment_name,
+        )
+
     def run_experiment(
         self, evaluator_server_config: EvaluatorServerConfig
     ) -> RunContext:
@@ -107,16 +115,8 @@ class MultipleDataAssimilation(BaseRunModel):
                     f"Prior ensemble: {prior_ensemble} does not exists"
                 ) from err
         else:
-            experiment = self._storage.create_experiment(
-                parameters=self.ert_config.ensemble_config.parameter_configuration,
-                observations=self.ert_config.observations,
-                responses=self.ert_config.ensemble_config.response_configuration,
-                simulation_arguments=self._simulation_arguments,
-                name=self._simulation_arguments.experiment_name,
-            )
-
             prior = self._storage.create_ensemble(
-                experiment,
+                self.experiment,
                 ensemble_size=self._simulation_arguments.ensemble_size,
                 iteration=0,
                 name=target_ensemble_format % 0,
