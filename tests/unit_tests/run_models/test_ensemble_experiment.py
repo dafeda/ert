@@ -40,8 +40,11 @@ def test_check_if_runpath_exists(
         return [f"out/realization-{r}" for r in realizations]
 
     EnsembleExperiment.validate = MagicMock()
+    storage_mock = MagicMock()
+    storage_mock.create_experiment.return_value = MagicMock()
+    storage_mock.create_ensemble.return_value = MagicMock()
     ensemble_experiment = EnsembleExperiment(
-        simulation_arguments, MagicMock(), None, None, MagicMock()
+        simulation_arguments, MagicMock(), storage_mock, None, MagicMock()
     )
     ensemble_experiment.run_paths.get_paths = get_run_path_mock
     assert ensemble_experiment.check_if_runpath_exists() == expected

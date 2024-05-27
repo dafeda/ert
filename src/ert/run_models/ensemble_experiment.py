@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 class EnsembleExperiment(BaseRunModel):
     """
-    This workflow will create a new experiment and a new ensemble from
+    This run model creates a new experiment and a new ensemble from
     the user configuration. It will never overwrite existing ensembles, and
     will always sample parameters.
     """
@@ -49,28 +49,29 @@ class EnsembleExperiment(BaseRunModel):
             status_queue,
         )
 
-    def run_experiment(
-        self,
-        evaluator_server_config: EvaluatorServerConfig,
-    ) -> RunContext:
-        self.setPhaseName(self.run_message(), indeterminate=False)
-        experiment = self._storage.create_experiment(
+        self.experiment = self._storage.create_experiment(
             name=self.simulation_arguments.experiment_name,
             parameters=self.ert_config.ensemble_config.parameter_configuration,
             observations=self.ert_config.observations,
             simulation_arguments=self._simulation_arguments,
             responses=self.ert_config.ensemble_config.response_configuration,
         )
-        ensemble = self._storage.create_ensemble(
-            experiment,
+        self.ensemble = self._storage.create_ensemble(
+            self.experiment,
             name=self._simulation_arguments.current_ensemble,
             ensemble_size=self._simulation_arguments.ensemble_size,
         )
-        self.set_env_key("_ERT_EXPERIMENT_ID", str(experiment.id))
-        self.set_env_key("_ERT_ENSEMBLE_ID", str(ensemble.id))
+
+    def run_experiment(
+        self,
+        evaluator_server_config: EvaluatorServerConfig,
+    ) -> RunContext:
+        self.setPhaseName(self.run_message(), indeterminate=False)
+        self.set_env_key("_ERT_EXPERIMENT_ID", str(self.experiment.id))
+        self.set_env_key("_ERT_ENSEMBLE_ID", str(self.ensemble.id))
 
         prior_context = RunContext(
-            ensemble=ensemble,
+            ensemble=self.ensemble,
             runpaths=self.run_paths,
             initial_mask=np.array(
                 self._simulation_arguments.active_realizations, dtype=bool
