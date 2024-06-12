@@ -50,6 +50,14 @@ class EnsembleSmoother(BaseRunModel):
         self.update_settings = update_settings
         self.support_restart = False
 
+        self.experiment = self._storage.create_experiment(
+            parameters=self.ert_config.ensemble_config.parameter_configuration,
+            observations=self.ert_config.observations.datasets,
+            responses=self.ert_config.ensemble_config.response_configuration,
+            simulation_arguments=self._simulation_arguments,
+            name=self._simulation_arguments.experiment_name,
+        )
+
     @property
     def simulation_arguments(self) -> ESRunArguments:
         args = self._simulation_arguments
@@ -67,18 +75,11 @@ class EnsembleSmoother(BaseRunModel):
         log_msg = "Running ES"
         logger.info(log_msg)
         self.setPhaseName(log_msg, indeterminate=True)
-        experiment = self._storage.create_experiment(
-            parameters=self.ert_config.ensemble_config.parameter_configuration,
-            observations=self.ert_config.observations.datasets,
-            responses=self.ert_config.ensemble_config.response_configuration,
-            simulation_arguments=self._simulation_arguments,
-            name=self._simulation_arguments.experiment_name,
-        )
 
-        self.set_env_key("_ERT_EXPERIMENT_ID", str(experiment.id))
+        self.set_env_key("_ERT_EXPERIMENT_ID", str(self.experiment.id))
         prior_name = self._simulation_arguments.current_ensemble
         prior = self._storage.create_ensemble(
-            experiment,
+            self.experiment,
             ensemble_size=self._simulation_arguments.ensemble_size,
             name=prior_name,
         )
@@ -122,7 +123,7 @@ class EnsembleSmoother(BaseRunModel):
         target_ensemble_format = self._simulation_arguments.target_ensemble
         posterior_context = RunContext(
             ensemble=self._storage.create_ensemble(
-                experiment,
+                self.experiment,
                 ensemble_size=prior.ensemble_size,
                 iteration=1,
                 name=target_ensemble_format,
