@@ -15,6 +15,11 @@ k_end = 500
 u_init = np.zeros((k_end, nx, nx))
 u_init[:, 5:7, 5:7] = 100
 
+# Initialize 3D arrays (with depth 1 to simulate 2D)
+u_3d = np.zeros((k_end, 1, nx, nx))
+u_3d[0, 0] = u_init[0]
+alpha_3d = np.ones((1, nx, nx))
+
 # Resolution in the x-direction (nothing to worry about really)
 dx = 1
 
