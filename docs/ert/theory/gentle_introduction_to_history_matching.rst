@@ -15,9 +15,9 @@ Tiny single-layer reservoir
 
 .. figure:: images/intro_tiny_reservoir.png
 
-Imagine a tiny reservoir with a single layer with two wells, :math:`w_1` and :math:`w_2`.
+Imagine a tiny reservoir with a single layer (no depth dimension) with two wells, :math:`w_1` and :math:`w_2`.
 At both wells we can measure things like pressure, temperature, rates etc. which we call the **observations**.
-Note that sensors are not error-free, so observations include measurement uncertainty.
+Sensors are not error-free, so observations include measurement uncertainty.
 Data that are only measured at wells are called **production data**.
 There are other types of data as well, such as **seismic data** that allows us to measure properties of the reservoir at locations between wells, but let's just focus on production data for now.
 
@@ -25,7 +25,7 @@ We can also sample the actual rock at the well locations and measure properties 
 The rock properties in every other position, or grid-cell :math:`x_i` are uncertain and must be estimated.
 We call these the **parameters**.
 
-So, the main question we want to answer is this:
+The main question we want to answer is this:
 
     What is the reservoir made of where direct observations can't be made?
 
@@ -45,10 +45,10 @@ A straight-forward method of trying to answer the main question posed above is t
 
 If the simulated values are close to the observed ones, we can be somewhat confident that our guess was good.
 On the other hand, if the simulated values do not match the observed values, we can make a different guess and repeat the process.
-You can keep on doing this until you find a set of parameter values that give you a sufficiently good match and call it a day.
-You can then use these parameters to make predictions, do well-planning etc.
+We can keep on doing this until we find a set of parameter values that give us a sufficiently good match and call it a day.
+We can then use these parameters to make predictions, do well-planning, etc.
 
-It's worth spending some time understanding this figure and introduce some terminology.
+It's worth spending some time understanding this figure and introducing some terminology.
 Recall that :math:`w_1` and :math:`w_2` represent wells and :math:`x_i` represents the rock properties at grid-cell :math:`i`.
 The notation :math:`x_i \sim \mathcal{N}(\mu, \sigma^2)` means that the rock property in every grid-cell :math:`i` is normally distributed with mean :math:`\mu` and variance :math:`\sigma^2`.
 It is typically the reservoir engineer that chooses which statistical distribution to use.
@@ -75,7 +75,7 @@ Assisted History Matching (AHM)
 
 .. figure:: images/intro_assisted_history_matching.png
 
-The process of manually guessing parameters-values, running simulators and checking results can be automated.
+The process of manually guessing parameter values, running simulators and checking results can be automated.
 
 We start by generating many alternative guesses for the parameters, illustrated by a stack of 2D grids in the figure.
 This set of guesses is called an **ensemble** and each member of an ensemble is called a **realization**.
@@ -100,6 +100,7 @@ For this reason it is better if geologists and reservoir engineers build a prior
 When the ensemble covers the observations in this way, we say it has good **coverage**.
 
 At a high level, AHM combines these simulated values and observations to generate an updated ensemble of parameters that better explains the data.
+In statistical language, the prior belief (our realizations) are combined with the likelihood (observed value) to produce the posterior belief (our updated ensemble of realizations).
 
 Before we dig deeper, we need to briefly talk about uncertainty.
 
@@ -108,7 +109,7 @@ Uncertainty
 
 .. figure:: images/intro_uncertainty.png
 
-We have so far only discussed the uncertainty in the values of the parameters.
+So far we have only discussed the uncertainty in the parameter values.
 When we say that :math:`x_i \sim \mathcal{N}(\mu, \sigma^2)`, what we are really saying is that we are uncertain what the value of :math:`x_i` is, but that we think it is normally distributed around some mean and with some variance.
 
 Observed values are also uncertain since they are measured using real sensors which are not perfect.
@@ -132,7 +133,7 @@ These new parameter estimates are hopefully better guesses than the ones we star
 
 Let's introduce some math notation.
 
-:math:`\mathbf{X} \in \mathbb{R}^{p \times N}` is a common way of defining a matrix :math:`\mathbf{X}` that consist of real-numbers (think floats),
+:math:`\mathbf{X} \in \mathbb{R}^{p \times N}` is a common way of defining a matrix :math:`\mathbf{X}` that consists of real numbers (think floats),
 and that has :math:`p` rows (number of parameters) and :math:`N` columns (number of realizations or samples).
 
 :math:`\mathbf{Y} \in \mathbb{R}^{m \times N}` specifies a response matrix :math:`\mathbf{Y}` with :math:`m` rows and :math:`N` columns.
@@ -195,7 +196,7 @@ It should also have a smaller variance which means that the uncertainty is lower
 
 The lower-right figure shows that the simulated values after updating still cover the observed values but are less spread.
 
-While we are still not completely ready to tackle the ensemble smoother equation, it's useful to present it now and then gradually introduce the remaining concepts needed for a fuller understanding.
+While we are still not completely ready to tackle the ensemble smoother equation, it's useful to present it now and then gradually introduce the remaining concepts needed for a full understanding.
 
 Ensemble Smoother Equation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -233,11 +234,11 @@ Field,- and surface parameters refer to properties that vary spatially throughou
 +---------+------------------------------------------------------------------------------------------+------------------------------------------------------+
 | Type    | Description                                                                              | Example                                              |
 +=========+==========================================================================================+======================================================+
-| Scalar  | A single value for the entire reservoir or model; does not vary spatially.               | Average porosity                                     |
-+---------+------------------------------------------------------------------------------------------+------------------------------------------------------+
-| Field   | A property that varies in space; each grid cell or location has a specific value.        | Porosity or permeability at each grid cell           |
+| Scalar  | A single 1D value for the entire reservoir or model; does not vary spatially.               | Average porosity                                     |
 +---------+------------------------------------------------------------------------------------------+------------------------------------------------------+
 | Surface | A 2D map that represents a property at a surface; value varies in x and y but not in z.  | Depth from reservoir top to ocean floor              |
++---------+------------------------------------------------------------------------------------------+------------------------------------------------------+
+| Field   | A 3D property that varies in space; each grid cell or location has a specific value.        | Porosity or permeability at each grid cell           |
 +---------+------------------------------------------------------------------------------------------+------------------------------------------------------+
 
 One column of the parameter matrix can contain all the different types of parameters.
@@ -253,16 +254,16 @@ Response matrix
 
 .. figure:: images/intro_response_matrix.png
 
-The response matrix has shape (number of observations / responses x number of realizations).
+The response matrix :math:`\mathbf{Y}` has shape (number of observations / responses x number of realizations).
 Every row is a response like pressure, temperature, flow rates, seismic measurements etc.
 In a typical history matching project, the response matrix typically has hundreds or thousands of rows.
 
-It is the result of running a simulator like Eclipse with the parameter matrix as input.
+The response matrix :math:`\mathbf{Y}` is the result of running a simulator like Eclipse with the parameter matrix as input.
 In math notation this is :math:`\mathbf{Y} = g(\mathbf{X})` where :math:`g(.)` is a function that can represent a simulator like Eclipse.
 In practice, the function :math:`g(.)` can encompass more than just Eclipse.
 It can contain various kinds of pre-processing etc., but let's just think of it as some fluid flow simulator.
 
-Remember that the parameter matrix, or input to the function :math:`g` has multiple columns, where each column represents a realization.
+Remember that the parameter matrix has multiple columns, where each column represents a realization.
 In practice, we run each realization in parallel.
 That is, we run one flow simulation per realization.
 Fluid flow simulations can be quite computationally expensive, so we run in parallel to save time.
@@ -274,7 +275,7 @@ Will :math:`\mathbf{y}` also be normally distributed?
 
 Turns out that the answer depends on what :math:`g(.)` is like.
 If it's linear then :math:`\mathbf{y}` will also be normally distributed.
-If it's non-linear, it can be anything really depending on what :math:`g` is like.
+If it's non-linear, it can be anything really depending on :math:`g`.
 
 A bit hand-wavy perhaps, but worth noting that it's easier to get a good history match if :math:`g` is linear than if it's not.
 This has to do with some underlying assumptions behind the ensemble smoother equations, but let's leave that aside for now.
@@ -307,7 +308,7 @@ It is a well known problem in statistics that sample cross-covariances are noisy
 That is, when the ensemble size :math:`N` is small relative to the number of parameters, the sample cross-covariance is not a particularly trustworthy measure of the relation between parameters and responses.
 Lots of parameters with few samples lead to what are often referred to **spurious correlations** which we'll consider in more detail later.
 
-The denominator :math:`N-1` makes the sample cross-covariance an unbiased estimator, a detail we don't need to consider any further.
+The denominator :math:`N-1` is called Bessel's correction and it makes the sample cross-covariance an unbiased estimator, a detail we don't need to consider any further.
 
 So, we can say that the strength of the update is proportional to the cross-covariance between parameters and responses, other things being equal.
 
@@ -346,10 +347,10 @@ Observation Error Covariance
 I've always found this one difficult to understand and therefore also difficult to teach.
 
 In contrast to the response covariance which is calculated using values produced by simulators, the observation error covariance consists of values the users themselves specify.
-For each observation, the users must specify how much they trust the sensor used to make the measurement.
+For each observation, the users must specify how much they trust the measurement.
 
 Ideally, they should also specify how correlated the errors are, but this is almost impossible to do in practice, so we assume all errors to be independent.
-Assuming all errors to be independent means that the matrix is a diagonal matrix, i.e., there are only non-zero numbers on the diagonal.
+Assuming all errors to be independent means that the matrix diagonal, i.e., there are only non-zero numbers on the diagonal.
 This is a somewhat reasonable assumption to make for production data, but not for seismic data for somewhat complicated reasons.
 
 So, :math:`\mathbf{R}` is smaller than it should be which means that the update is stronger than it should be.
@@ -423,7 +424,6 @@ The correlation matrix calculated from :math:`\mathbf{X}` is a 5x5 matrix.
 Element :math:`(i, j)` of the correlation matrix is the correlation between variable :math:`i` and variable :math:`j`.
 
 Now, since we designed this synthetic experiment such that every variable is independent, we expect all off-diagonal elements to be zero.
-Consider this carefully.
 However, we see from the top-right figure that the off-diagonal elements are not zero.
 In fact, some of them are quite high.
 For example, element :math:`(0, 3)` is 0.4.
@@ -564,7 +564,7 @@ Doing an update step means running the ensemble smoother equation.
 There's a trick to ES-MDA though.
 Before each update step, it scales the observation errors by a factor :math:`\sqrt{\alpha_1}` that is larger than 1.
 This weakens the update.
-The idea is that multiple weaker updates are better than a single large update.
+The idea is that multiple small updates are better than a single large update.
 
 After the first update step has completed, we are ready to do another simulation step.
 Again, we run from time 0 until today and write data to disk along the way.
