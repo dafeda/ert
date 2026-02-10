@@ -30,7 +30,7 @@ from ert.config import (
 from ._update_commons import (
     ErtAnalysisError,
     _copy_unupdated_parameters,
-    _OutlierColumns,
+    _ObservationStatusColumns,
     _preprocess_observations_and_responses,
     noop_progress_callback,
 )
@@ -215,7 +215,7 @@ def analysis_ES(
 
     S = filtered_data.select([*map(str, iens_active_index)]).to_numpy(order="c")
     observation_values = filtered_data["observations"].to_numpy()
-    observation_errors = filtered_data[_OutlierColumns.scaled_std].to_numpy()
+    observation_errors = filtered_data[_ObservationStatusColumns.scaled_std].to_numpy()
 
     progress_callback(AnalysisStatusEvent(msg="Loading observations and responses.."))
     num_obs = len(observation_values)

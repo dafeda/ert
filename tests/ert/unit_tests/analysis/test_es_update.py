@@ -10,7 +10,7 @@ from tabulate import tabulate
 from ert.analysis import ErtAnalysisError, ObservationStatus, smoother_update
 from ert.analysis._update_commons import (
     _compute_observation_statuses,
-    _OutlierColumns,
+    _ObservationStatusColumns,
     _preprocess_observations_and_responses,
 )
 from ert.analysis.event import AnalysisCompleteEvent
@@ -692,7 +692,7 @@ def test_that_autoscaling_applies_to_scaled_errors(storage):
                 ensemble=ensemble,
             )
             .filter(pl.col("status") == ObservationStatus.ACTIVE)[
-                _OutlierColumns.scaled_std
+                _ObservationStatusColumns.scaled_std
             ]
             .to_list()
         )
@@ -708,7 +708,7 @@ def test_that_autoscaling_applies_to_scaled_errors(storage):
                 ensemble=ensemble,
             )
             .filter(pl.col("status") == ObservationStatus.ACTIVE)[
-                _OutlierColumns.scaled_std
+                _ObservationStatusColumns.scaled_std
             ]
             .to_list()
         )

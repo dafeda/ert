@@ -156,7 +156,7 @@ def test_edge_cases_with_few_observations_return_default_values(nr_observations)
     for i in range(nr_observations):
         Y[i] = (i + 1) * parameters_a
 
-    scale_factors, clusters, nr_components = main(Y, Y.mean(axis=1))
+    scale_factors, clusters, nr_components = main(Y, Y.std(axis=1))
 
     np.testing.assert_equal(
         scale_factors,

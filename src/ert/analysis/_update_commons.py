@@ -113,7 +113,9 @@ def _auto_scale_observations(
     scaling_factors_dfs = []
 
     scaling_factors_updated = (
-        observations_and_responses[_OutlierColumns.obs_scaling].to_numpy().copy()
+        observations_and_responses[_ObservationStatusColumns.obs_scaling]
+        .to_numpy()
+        .copy()
     )
 
     obs_keys = observations_and_responses["observation_key"].to_numpy().astype(str)
@@ -130,7 +132,7 @@ def _auto_scale_observations(
         data_for_obs = observations_and_responses.filter(obs_group_mask)
         scaling_factors, clusters, nr_components = misfit_preprocessor.main(
             data_for_obs.select(active_realizations).to_numpy(),
-            data_for_obs.select(_OutlierColumns.scaled_std).to_numpy(),
+            data_for_obs.select(_ObservationStatusColumns.scaled_std).to_numpy(),
         )
 
         scaling_factors_updated[obs_group_mask] *= scaling_factors
@@ -231,10 +233,12 @@ def _preprocess_observations_and_responses(
 
             # Recompute with updated scales
             observations_and_responses = observations_and_responses.with_columns(
-                pl.Series(updated_std_scales).alias(_OutlierColumns.obs_scaling)
+                pl.Series(updated_std_scales).alias(
+                    _ObservationStatusColumns.obs_scaling
+                )
             ).with_columns(
-                (pl.col(_OutlierColumns.obs_scaling) * pl.col("std")).alias(
-                    _OutlierColumns.scaled_std
+                (pl.col(_ObservationStatusColumns.obs_scaling) * pl.col("std")).alias(
+                    _ObservationStatusColumns.scaled_std
                 )
             )
 
@@ -260,7 +264,7 @@ def _compute_observation_statuses(
     outlier_settings: OutlierSettings | None = None,
 ) -> pl.DataFrame:
     """
-    Computes and adds columns (named in _OutlierColumns) for:
+    Computes and adds columns (named in _ObservationStatusColumns) for:
      * response mean
      * response standard deviation
      * observation error scaling
@@ -287,36 +291,41 @@ def _compute_observation_statuses(
 
     responses = observations_and_responses.select(active_realizations)
     response_stds = responses.with_columns(
-        pl.concat_list("*").list.std(ddof=0).alias(_OutlierColumns.response_std)
-    )[_OutlierColumns.response_std]
+        pl.concat_list("*")
+        .list.std(ddof=0)
+        .alias(_ObservationStatusColumns.response_std)
+    )[_ObservationStatusColumns.response_std]
 
     df_with_status = df_with_status.with_columns(
-        responses.mean_horizontal().alias(_OutlierColumns.ens_mean),
+        responses.mean_horizontal().alias(_ObservationStatusColumns.ens_mean),
         response_stds,
         # Inflating measurement errors by a factor sqrt(global_std_scaling) as shown
         # in for example evensen2018 - Analysis of iterative ensemble smoothers for
         # solving inverse problems.
         # `global_std_scaling` is 1.0 for ES.
         pl.lit(np.sqrt(global_std_scaling), dtype=pl.Float64).alias(
-            _OutlierColumns.obs_scaling
+            _ObservationStatusColumns.obs_scaling
         ),
     ).with_columns(
-        (pl.col("std") * pl.col(_OutlierColumns.obs_scaling)).alias(
-            _OutlierColumns.scaled_std
+        (pl.col("std") * pl.col(_ObservationStatusColumns.obs_scaling)).alias(
+            _ObservationStatusColumns.scaled_std
         )
     )
 
     df_with_status = df_with_status.with_columns(
         pl.when(obs_has_null_response_)
         .then(pl.lit(ObservationStatus.MISSING_RESPONSE))
-        .when(pl.col(_OutlierColumns.response_std) <= outlier_settings.std_cutoff)
+        .when(
+            pl.col(_ObservationStatusColumns.response_std)
+            <= outlier_settings.std_cutoff
+        )
         .then(pl.lit(ObservationStatus.STD_CUTOFF))
         .when(
-            abs(pl.col("observations") - pl.col(_OutlierColumns.ens_mean))
+            abs(pl.col("observations") - pl.col(_ObservationStatusColumns.ens_mean))
             > outlier_settings.alpha
             * (
-                pl.col(_OutlierColumns.response_std)
-                + pl.col(_OutlierColumns.scaled_std)
+                pl.col(_ObservationStatusColumns.response_std)
+                + pl.col(_ObservationStatusColumns.scaled_std)
             )
         )
         .then(pl.lit(ObservationStatus.OUTLIER))
@@ -327,7 +336,10 @@ def _compute_observation_statuses(
     return df_with_status
 
 
-class _OutlierColumns(StrEnum):
+class _ObservationStatusColumns(StrEnum):
+    """Column names for response statistics and observation
+    error scaling used in status determination."""
+
     response_std = "response_std"
     ens_mean = "response_mean"
     obs_scaling = "obs_error_scaling"
