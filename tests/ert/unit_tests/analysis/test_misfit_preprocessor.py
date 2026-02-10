@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from ert.analysis.misfit_preprocessor import (
+    cluster_responses,
     get_nr_primary_components,
     get_scaling_factor,
     main,
@@ -340,3 +341,167 @@ def test_autoscale_clusters_observations_by_correlation_pattern_ignoring_sign(
         expected_scale_factors[cluster_indices] = expected_sf
 
     np.testing.assert_allclose(scale_factors, expected_scale_factors)
+
+
+def test_that_clustering_prioritizes_global_similarity_over_local_correlation():
+    """
+    This test demonstrates that the current clustering implementation (using
+    Euclidean distance on correlation rows) can behave unintuitively by prioritizing
+    pairs with LOWER direct correlation for merging over pairs with HIGHER direct
+    correlation, if the higher-correlation pair disagrees strongly on other variables.
+
+    "Prioritizing" here means that the hierarchical clustering algorithm considers
+    the lower-correlation pair to be "closer" (more similar) and thus merges them
+    earlier in the bottom-up process.
+
+    Scenario:
+    - Group 1: A, B, C.
+      A and C are independent.
+      B is a mix of A and C (correlated ~0.707 with both).
+      A and B are correlated ~0.7.
+      However, A and B agree poorly on C (A=0, B=0.7).
+      The Euclidean distance between A's and B's correlation rows is large
+      because of this disagreement on C.
+
+    - Group 2: D, E.
+      D and E are isolated and correlated ~0.55.
+      They agree perfectly on A, B, C (all zero).
+      The Euclidean distance between D's and E's correlation rows is relatively
+      small because they have consistent (zero) correlations with everything else.
+
+    Result:
+    The algorithm decides that D and E are "closer" than A and B, even though
+    Corr(A, B) > Corr(D, E). Consequently, it merges D-E into a cluster BEFORE
+    it merges A-B.
+    """
+    rng = np.random.default_rng(42)
+    N_realizations = 10000
+
+    # Construct A, B, C
+    A = rng.standard_normal(N_realizations)
+    C = rng.standard_normal(N_realizations)
+    # B = A + C. Normalize everyone.
+    A = (A - np.mean(A)) / np.std(A)
+    C = (C - np.mean(C)) / np.std(C)
+    B = A + C
+    B = (B - np.mean(B)) / np.std(B)
+
+    # Construct D, E
+    D = rng.standard_normal(N_realizations)
+    noise = rng.standard_normal(N_realizations)
+    # Target correlation ~0.55
+    # E = weight * D + ...
+    # we want E such that corr(D, E) approx 0.55.
+    E = 0.55 * D + np.sqrt(1 - 0.55**2) * noise
+    D = (D - np.mean(D)) / np.std(D)
+    E = (E - np.mean(E)) / np.std(E)
+
+    dataset = np.array([A, B, C, D, E]).T
+
+    # Verify correlations
+    corr = np.corrcoef(dataset, rowvar=False)
+    # The return type of corrcoef is ambiguous (float | ndarray) in stubs,
+    # so we assert it is an array to silence static analysis warnings about indexing.
+    assert isinstance(corr, np.ndarray)
+    corr_AB = corr[0, 1]
+    corr_DE = corr[3, 4]
+
+    assert np.isclose(corr_AB, 0.707, atol=0.05), (
+        f"Setup error: A-B corr {corr_AB} != 0.707"
+    )
+    assert np.isclose(corr_DE, 0.55, atol=0.05), (
+        f"Setup error: D-E corr {corr_DE} != 0.55"
+    )
+
+    # We ask for a clustering that would force exactly ONE merge.
+    # Total items = 5 (A, B, C, D, E).
+    # If we ask for 4 clusters, the algorithm must pick the single "best" pair
+    # to merge and leave the others as singletons.
+    #
+    # Intuition: A-B (0.7) is the strongest correlation, so it should merge first.
+    # Reality (Current Algo): D-E (0.55) is considered "closer" in row-space
+    # due to the 'C' distractor, so D-E merges first.
+    clusters = cluster_responses(dataset, nr_clusters=4)
+
+    # If D and E are in the SAME cluster, but A and B are DIFFERENT ...
+    is_DE_merged = clusters[3] == clusters[4]
+    is_AB_merged = clusters[0] == clusters[1]
+
+    # This assertion documents the "flaw":
+    # The algorithm merged the weaker pair (D-E) and left the stronger pair (A-B) split.
+    failure_msg = (
+        f"Algorithm behavior changed? DE_merged={is_DE_merged}, "
+        f"AB_merged={is_AB_merged}. "
+        f"Correlations: AB={corr_AB:.3f}, DE={corr_DE:.3f}"
+    )
+    assert is_DE_merged, failure_msg
+    assert not is_AB_merged, failure_msg
+
+
+def test_that_error_scaling_discards_noisy_observations_in_pca():
+    """
+    Documents current behavior: when scaling responses by observation error
+    (Y / obs_errors), precise observations dominate and noisy observations
+    are effectively discarded by PCA truncation.
+
+    Scenario: 500 noisy seismic amplitudes + 20 precise well pressures,
+    where seismic responds to a shallow parameter and pressure responds
+    to an independent deep parameter.
+
+    With error-scaling (divide by obs_errors):
+    - Precise pressure measurements get amplified
+    - Noisy seismic measurements get suppressed
+    - Result: 1 PC needed (pressure dominates, seismic info lost)
+
+    With StandardScaler (z-score, unit variance per observation):
+    - Both observation types are treated equally
+    - Result: 2 PCs needed (both independent directions preserved)
+    """
+    rng = np.random.default_rng(42)
+    n_realizations = 100
+
+    n_seismic = 500
+    n_pressure = 20
+
+    # Two independent underlying parameters
+    param_shallow = rng.normal(0, 1, size=(n_realizations, 1))
+    param_deep = rng.normal(0, 1, size=(n_realizations, 1))
+
+    # Seismic: sensitive to shallow param
+    seismic_sensitivity = rng.uniform(0.5, 1.5, size=(1, n_seismic))
+    seismic_responses = param_shallow @ seismic_sensitivity
+    seismic_responses += rng.normal(0, 0.1, size=(n_realizations, n_seismic))
+
+    # Pressure: sensitive to deep param (independent of seismic)
+    pressure_sensitivity = rng.uniform(0.5, 1.5, size=(1, n_pressure))
+    pressure_responses = param_deep @ pressure_sensitivity
+    pressure_responses += rng.normal(0, 0.1, size=(n_realizations, n_pressure))
+
+    responses = np.hstack([seismic_responses, pressure_responses])
+
+    # Observation errors: seismic is NOISY, pressure is PRECISE
+    seismic_errors = np.full(n_seismic, 2.0)
+    pressure_errors = np.full(n_pressure, 0.05)
+    obs_errors = np.hstack([seismic_errors, pressure_errors])
+
+    # Method A: Error scaling (current approach)
+    scaled_by_error = responses / obs_errors
+    n_components_error_scaling = get_nr_primary_components(
+        scaled_by_error, threshold=0.95
+    )
+
+    # Method B: Standard scaling (z-score)
+    scaled_standard = (responses - responses.mean(axis=0)) / responses.std(axis=0)
+    n_components_standard_scaling = get_nr_primary_components(
+        scaled_standard, threshold=0.95
+    )
+
+    # With error scaling, precise observations dominate → only 1 PC needed
+    assert n_components_error_scaling == 1, (
+        f"Error scaling should yield 1 PC (pressure dominates), got {n_components_error_scaling}"
+    )
+
+    # With standard scaling, both independent directions are visible → 2 PCs needed
+    assert n_components_standard_scaling == 2, (
+        f"Standard scaling should yield 2 PCs (both groups visible), got {n_components_standard_scaling}"
+    )
