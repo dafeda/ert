@@ -542,3 +542,35 @@ def test_that_error_scaling_discards_noisy_observations_in_pca():
         f"Standard scaling should yield 2 PCs (both groups visible), "
         f"got {n_components_standard_scaling}"
     )
+
+
+def test_independent_measurments_clustered_together_in_case_of_irregular_obs_errors():
+    """
+    This test demonstrates that when observations have irregular errors, the
+    current clustering approach can lead to unintuitive results where independent
+    observations are clustered together, and treated as correlated.
+
+    Senario:
+    Suppose we have 100 independend observations r_1,r_2,...,r_100 with corresponding
+    observation errors, where r_1 has a small error, and r_2,...,r_100 have large
+    errors. The error-scaling step amplifies r_1's response and suppresses
+    r_2,...,r_100, leading to one cluser instead of 100 clusters. As a result, the
+    history matching update is defalted as if all 100 observations were
+    perfectly correlated, even though they are all independent.
+    """
+
+    # Create 100 independent responses
+    rng = np.random.default_rng(42)
+    n_observations = 100
+    n_realizations = 1000
+    responses = rng.standard_normal((n_observations, n_realizations))
+
+    # Create irregular observation errors: one small, the rest large
+    obs_errors = np.array([0.1] + [10.0] * (n_observations - 1))
+
+    # run clustering algorithm
+    _, clusters, _ = main(responses, obs_errors)
+
+    # Assert that all observations are clustered together (only 1 cluster)
+    assert len(clusters) == 100
+    assert len(np.unique(clusters)) == 1
