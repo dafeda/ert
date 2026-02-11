@@ -343,7 +343,19 @@ def test_autoscale_clusters_observations_by_correlation_pattern_ignoring_sign(
     np.testing.assert_allclose(scale_factors, expected_scale_factors)
 
 
-def test_that_clustering_prioritizes_global_similarity_over_local_correlation():
+@pytest.mark.parametrize(
+    ("corr_de_target", "expect_de_merged"),
+    [
+        (0.55, True),  # Above threshold ~0.42: D-E merges first
+        (0.50, True),
+        (0.45, True),
+        (0.40, False),  # Below threshold: A-B merges first
+        (0.30, False),
+    ],
+)
+def test_that_clustering_prioritizes_global_similarity_over_local_correlation(
+    corr_de_target, expect_de_merged
+):
     """
     This test demonstrates that the current clustering implementation (using
     Euclidean distance on correlation rows) can behave unintuitively by prioritizing
@@ -369,10 +381,25 @@ def test_that_clustering_prioritizes_global_similarity_over_local_correlation():
       The Euclidean distance between D's and E's correlation rows is relatively
       small because they have consistent (zero) correlations with everything else.
 
-    Result:
-    The algorithm decides that D and E are "closer" than A and B, even though
-    Corr(A, B) > Corr(D, E). Consequently, it merges D-E into a cluster BEFORE
-    it merges A-B.
+    Note on D-E distance calculation:
+      Each variable's correlation row includes its correlation with ALL variables,
+      including itself (1.0 on diagonal) and its pair partner. For D and E:
+        D's row: [corr(D,A), corr(D,B), corr(D,C), 1.0,        corr(D,E)]
+        E's row: [corr(E,A), corr(E,B), corr(E,C), corr(E,D),  1.0      ]
+      The difference comes from positions 4 and 5: (1.0 vs 0.55) and (0.55 vs 1.0).
+      Distance = np.sqrt((1-0.55)**2 + (0.55-1)**2) ≈ 0.64.
+      If corr(D,E) were lower (e.g., 0.3), the distance would increase to ~0.99,
+      potentially making D-E no longer the closest pair.
+
+    Threshold calculation:
+      dist(D,E) = sqrt(2) * (1 - corr(D,E))
+      dist(A,B) ≈ 0.82 (from disagreement on C)
+      Solving sqrt(2) * (1 - r) = 0.82 gives r ≈ 0.42.
+      When corr(D,E) > 0.42, D-E merges first; otherwise it does not.
+
+    This test is parametrized to verify both regimes:
+    - corr(D,E) > 0.42: D-E merges before A-B despite corr(A,B) > corr(D,E)
+    - corr(D,E) < 0.42: D-E no longer the closest pair
     """
     rng = np.random.default_rng(42)
     N_realizations = 10000
@@ -386,13 +413,10 @@ def test_that_clustering_prioritizes_global_similarity_over_local_correlation():
     B = A + C
     B = (B - np.mean(B)) / np.std(B)
 
-    # Construct D, E
+    # Construct D, E with target correlation
     D = rng.standard_normal(N_realizations)
     noise = rng.standard_normal(N_realizations)
-    # Target correlation ~0.55
-    # E = weight * D + ...
-    # we want E such that corr(D, E) approx 0.55.
-    E = 0.55 * D + np.sqrt(1 - 0.55**2) * noise
+    E = corr_de_target * D + np.sqrt(1 - corr_de_target**2) * noise
     D = (D - np.mean(D)) / np.std(D)
     E = (E - np.mean(E)) / np.std(E)
 
@@ -409,33 +433,27 @@ def test_that_clustering_prioritizes_global_similarity_over_local_correlation():
     assert np.isclose(corr_AB, 0.707, atol=0.05), (
         f"Setup error: A-B corr {corr_AB} != 0.707"
     )
-    assert np.isclose(corr_DE, 0.55, atol=0.05), (
-        f"Setup error: D-E corr {corr_DE} != 0.55"
+    assert np.isclose(corr_DE, corr_de_target, atol=0.05), (
+        f"Setup error: D-E corr {corr_DE} != {corr_de_target}"
     )
 
     # We ask for a clustering that would force exactly ONE merge.
     # Total items = 5 (A, B, C, D, E).
     # If we ask for 4 clusters, the algorithm must pick the single "best" pair
     # to merge and leave the others as singletons.
-    #
-    # Intuition: A-B (0.7) is the strongest correlation, so it should merge first.
-    # Reality (Current Algo): D-E (0.55) is considered "closer" in row-space
-    # due to the 'C' distractor, so D-E merges first.
     clusters = cluster_responses(dataset, nr_clusters=4)
 
-    # If D and E are in the SAME cluster, but A and B are DIFFERENT ...
     is_DE_merged = clusters[3] == clusters[4]
     is_AB_merged = clusters[0] == clusters[1]
 
-    # This assertion documents the "flaw":
-    # The algorithm merged the weaker pair (D-E) and left the stronger pair (A-B) split.
     failure_msg = (
-        f"Algorithm behavior changed? DE_merged={is_DE_merged}, "
-        f"AB_merged={is_AB_merged}. "
+        f"DE_merged={is_DE_merged}, AB_merged={is_AB_merged}. "
         f"Correlations: AB={corr_AB:.3f}, DE={corr_DE:.3f}"
     )
-    assert is_DE_merged, failure_msg
-    assert not is_AB_merged, failure_msg
+    assert is_DE_merged == expect_de_merged, failure_msg
+    # When D-E merges first, A-B should not (they stay separate)
+    if expect_de_merged:
+        assert not is_AB_merged, failure_msg
 
 
 def test_that_error_scaling_discards_noisy_observations_in_pca():
@@ -498,10 +516,12 @@ def test_that_error_scaling_discards_noisy_observations_in_pca():
 
     # With error scaling, precise observations dominate → only 1 PC needed
     assert n_components_error_scaling == 1, (
-        f"Error scaling should yield 1 PC (pressure dominates), got {n_components_error_scaling}"
+        f"Error scaling should yield 1 PC (pressure dominates), "
+        f"got {n_components_error_scaling}"
     )
 
     # With standard scaling, both independent directions are visible → 2 PCs needed
     assert n_components_standard_scaling == 2, (
-        f"Standard scaling should yield 2 PCs (both groups visible), got {n_components_standard_scaling}"
+        f"Standard scaling should yield 2 PCs (both groups visible), "
+        f"got {n_components_standard_scaling}"
     )
