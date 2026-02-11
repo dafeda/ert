@@ -376,30 +376,35 @@ def test_that_clustering_prioritizes_global_similarity_over_local_correlation(
       because of this disagreement on C.
 
     - Group 2: D, E.
-      D and E are isolated and correlated ~0.55.
+      D and E are isolated and correlated with strength rho (varied by parametrization).
       They agree perfectly on A, B, C (all zero).
       The Euclidean distance between D's and E's correlation rows is relatively
       small because they have consistent (zero) correlations with everything else.
 
-    Note on D-E distance calculation:
-      Each variable's correlation row includes its correlation with ALL variables,
-      including itself (1.0 on diagonal) and its pair partner. For D and E:
-        D's row: [corr(D,A), corr(D,B), corr(D,C), 1.0,        corr(D,E)]
-        E's row: [corr(E,A), corr(E,B), corr(E,C), corr(E,D),  1.0      ]
-      The difference comes from positions 4 and 5: (1.0 vs 0.55) and (0.55 vs 1.0).
-      Distance = np.sqrt((1-0.55)**2 + (0.55-1)**2) ≈ 0.64.
-      If corr(D,E) were lower (e.g., 0.3), the distance would increase to ~0.99,
-      potentially making D-E no longer the closest pair.
+    Each variable's correlation row includes its correlation with all variables,
+    including itself (1.0 on diagonal) and its pair partner. For D and E:
+
+    D's row: [corr(D,A)=0, corr(D,B)=0, corr(D,C)=0, corr(D,D)=1.0, corr(D,E)=rho]
+    E's row: [corr(E,A)=0, corr(E,B)=0, corr(E,C)=0, corr(E,D)=rho, corr(E,E)=1.0]
+
+    A's row: [corr(A,A)=1.0, corr(A,B)=0.7, corr(A,C)=0, corr(A,D)=0, corr(A,E)=0]
+    B's row: [corr(B,A)=0.7, corr(B,B)=1.0, corr(B,C)=0.7, corr(B,D)=0, corr(B,E)=0]
 
     Threshold calculation:
-      dist(D,E) = sqrt(2) * (1 - corr(D,E))
-      dist(A,B) ≈ 0.82 (from disagreement on C)
-      Solving sqrt(2) * (1 - r) = 0.82 gives r ≈ 0.42.
-      When corr(D,E) > 0.42, D-E merges first; otherwise it does not.
+      dist(D,E) = sqrt((0-0)^2 + (0-0)^2 + (0-0)^2 + (1-rho)^2 + (rho-1)^2))
+      dist(A,B) = sqrt((1-0.7)^2 + (0.7-1)^2 + (0-0.7)^2 + (0-0)^2 + (0-0)^2)) = 0.82
+
+      Solve dist(D,E) < dist(A,B) for rho:
+      sqrt(2 * (1 - rho)^2) < 0.82
+        2 * (1 - rho)^2 < 0.82^2
+        (1 - rho)^2 < 0.82^2 / 2
+        1 - rho < sqrt(0.82^2 / 2)
+        rho > 1 - sqrt(0.82^2 / 2) ≈ 0.42
+      Hence, when rho > 0.42, D-E merges first; otherwise it does not.
 
     This test is parametrized to verify both regimes:
-    - corr(D,E) > 0.42: D-E merges before A-B despite corr(A,B) > corr(D,E)
-    - corr(D,E) < 0.42: D-E no longer the closest pair
+    - rho > 0.42: D-E merges before A-B despite corr(A,B) > rho
+    - rho < 0.42: D-E no longer the closest pair
     """
     rng = np.random.default_rng(42)
     N_realizations = 10000
