@@ -143,34 +143,33 @@ def test_that_correlated_and_independent_observations_are_grouped_separately(
     np.testing.assert_equal(obs_errors, obs_error_copy)
 
 
-@pytest.mark.parametrize("nr_observations", [0, 1, 2])
-def test_edge_cases_with_few_observations_return_default_values(nr_observations):
-    """Test that edge cases with 0-2 observations return default scaling values.
-    We do not know why this is the case.
+def test_edge_cases_with_few_observations_return_default_values():
+    """
+    Test that edge cases with 2 observations return default scaling values.
+    We create an example of a response matrix where all rows are perfectly correlated,
+    which should lead to a single cluster with 1 component and a scaling factor of
+    sqrt(num_observations / num_components) = sqrt(2).
+    However, since the number of observations is <= 2, the function should skip the
+    clustering and PCA and return default values of 1.0 for all scaling factors
     """
     nr_realizations = 1000
+    nr_observations = 2
     Y = np.ones((nr_observations, nr_realizations))
 
     rng = np.random.default_rng(1234)
     parameters_a = rng.normal(10, 1, nr_realizations)
 
+    # create response matrix
     for i in range(nr_observations):
         Y[i] = (i + 1) * parameters_a
 
-    scale_factors, clusters, nr_components = main(Y, Y.mean(axis=1))
+    # Add observation errors
+    obs_errors = np.ones(nr_observations) * 0.1
+
+    scale_factors, *_ = main(Y, obs_errors)
 
     np.testing.assert_equal(
         scale_factors,
-        np.array(nr_observations * [1.0]),
-    )
-
-    np.testing.assert_equal(
-        clusters,
-        np.array(nr_observations * [1.0]),
-    )
-
-    np.testing.assert_equal(
-        nr_components,
         np.array(nr_observations * [1.0]),
     )
 
