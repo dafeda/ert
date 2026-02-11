@@ -349,7 +349,7 @@ def test_autoscale_clusters_observations_by_correlation_pattern_ignoring_sign(
         (0.55, True),  # Above threshold ~0.42: D-E merges first
         (0.50, True),
         (0.45, True),
-        (0.40, False),  # Below threshold: A-B merges first
+        (0.40, False),  # Below threshold: A-B or B-C merges first
         (0.30, False),
     ],
 )
@@ -360,39 +360,44 @@ def test_that_clustering_prioritizes_global_similarity_over_local_correlation(
     This test demonstrates that the current clustering implementation (using
     Euclidean distance on correlation rows) can behave unintuitively by prioritizing
     pairs with LOWER direct correlation for merging over pairs with HIGHER direct
-    correlation, if the higher-correlation pair disagrees strongly on other variables.
+    correlation. This happens when the higher-correlation pair disagrees strongly on
+    other variables.
 
     "Prioritizing" here means that the hierarchical clustering algorithm considers
     the lower-correlation pair to be "closer" (more similar) and thus merges them
-    earlier in the bottom-up process.
+    earlier in the bottom-up clustering process.
 
     Scenario:
     - Group 1: A, B, C.
       A and C are independent.
-      B is a mix of A and C (correlated ~0.707 with both).
-      A and B are correlated ~0.7.
-      However, A and B agree poorly on C (A=0, B=0.7).
-      The Euclidean distance between A's and B's correlation rows is large
-      because of this disagreement on C.
+      B = A + C (correlated ~0.707 with both).
+      In other words, A and B are correlated ~0.7, the same is true for B and C.
+      However, the Euclidean distance between A's and B's correlation rows is large
+      because of the disagreement on C
 
     - Group 2: D, E.
       D and E are isolated and correlated with strength rho (varied by parametrization).
-      They agree perfectly on A, B, C (all zero).
+      They agree perfectly on A, B, C (zero correlation with all).
       The Euclidean distance between D's and E's correlation rows is relatively
       small because they have consistent (zero) correlations with everything else.
 
-    Each variable's correlation row includes its correlation with all variables,
-    including itself (1.0 on diagonal) and its pair partner. For D and E:
+    Each variable's correlation row (the corresponding row in the correlation matrix)
+    includes its correlation with all variables, including itself (1.0 on diagonal).
+    For D and E we have:
 
     D's row: [corr(D,A)=0, corr(D,B)=0, corr(D,C)=0, corr(D,D)=1.0, corr(D,E)=rho]
     E's row: [corr(E,A)=0, corr(E,B)=0, corr(E,C)=0, corr(E,D)=rho, corr(E,E)=1.0]
 
+    For A, B and C we have:
     A's row: [corr(A,A)=1.0, corr(A,B)=0.7, corr(A,C)=0, corr(A,D)=0, corr(A,E)=0]
     B's row: [corr(B,A)=0.7, corr(B,B)=1.0, corr(B,C)=0.7, corr(B,D)=0, corr(B,E)=0]
+    C's row: [corr(C,A)=0, corr(C,B)=0.7, corr(C,C)=1.0, corr(C,D)=0, corr(C,E)=0]
 
-    Threshold calculation:
+    Threshold calculations (based on Euclidean distance between correlation rows):
       dist(D,E) = sqrt((0-0)^2 + (0-0)^2 + (0-0)^2 + (1-rho)^2 + (rho-1)^2))
-      dist(A,B) = sqrt((1-0.7)^2 + (0.7-1)^2 + (0-0.7)^2 + (0-0)^2 + (0-0)^2)) = 0.82
+                = sqrt(2 * (1 - rho)^2)
+      dist(A,B) = dist(B,C) = sqrt((1-0.7)^2 + (0.7-1)^2 + (0-0.7)^2 + (0-0)^2+(0-0)^2))
+                = 0.82
 
       Solve dist(D,E) < dist(A,B) for rho:
       sqrt(2 * (1 - rho)^2) < 0.82
@@ -400,12 +405,14 @@ def test_that_clustering_prioritizes_global_similarity_over_local_correlation(
         (1 - rho)^2 < 0.82^2 / 2
         1 - rho < sqrt(0.82^2 / 2)
         rho > 1 - sqrt(0.82^2 / 2) ≈ 0.42
-      Hence, when rho > 0.42, D-E merges first; otherwise it does not.
+      Hence, when rho > 0.42, D-E merges first; otherwise either A-B or B-C merges first
+      (depending on random variation in the sampling).
 
     This test is parametrized to verify both regimes:
-    - rho > 0.42: D-E merges before A-B despite corr(A,B) > rho
-    - rho < 0.42: D-E no longer the closest pair
+    - rho > 0.42: D-E merges first despite corr(A,B) > rho and corr(B,C) > rho
+    - rho < 0.42: D-E no longer the closest pair (either A-B or B-C merges first)
     """
+
     rng = np.random.default_rng(42)
     N_realizations = 10000
 
@@ -433,10 +440,14 @@ def test_that_clustering_prioritizes_global_similarity_over_local_correlation(
     # so we assert it is an array to silence static analysis warnings about indexing.
     assert isinstance(corr, np.ndarray)
     corr_AB = corr[0, 1]
+    corr_BC = corr[1, 2]
     corr_DE = corr[3, 4]
 
     assert np.isclose(corr_AB, 0.707, atol=0.05), (
         f"Setup error: A-B corr {corr_AB} != 0.707"
+    )
+    assert np.isclose(corr_BC, 0.707, atol=0.05), (
+        f"Setup error: B-C corr {corr_BC} != 0.707"
     )
     assert np.isclose(corr_DE, corr_de_target, atol=0.05), (
         f"Setup error: D-E corr {corr_DE} != {corr_de_target}"
@@ -450,15 +461,17 @@ def test_that_clustering_prioritizes_global_similarity_over_local_correlation(
 
     is_DE_merged = clusters[3] == clusters[4]
     is_AB_merged = clusters[0] == clusters[1]
+    is_BC_merged = clusters[1] == clusters[2]
 
     failure_msg = (
-        f"DE_merged={is_DE_merged}, AB_merged={is_AB_merged}. "
-        f"Correlations: AB={corr_AB:.3f}, DE={corr_DE:.3f}"
+        f"DE_merged={is_DE_merged}, AB_merged={is_AB_merged}, BC_merged={is_BC_merged}."
+        f"Correlations: AB={corr_AB:.3f}, BC={corr_BC:.3f}, DE={corr_DE:.3f}"
     )
     assert is_DE_merged == expect_de_merged, failure_msg
-    # When D-E merges first, A-B should not (they stay separate)
+    # When D-E merges first, A-B and B-Cshould not (they stay separate)
     if expect_de_merged:
         assert not is_AB_merged, failure_msg
+        assert not is_BC_merged, failure_msg
 
 
 def test_that_error_scaling_discards_noisy_observations_in_pca():
