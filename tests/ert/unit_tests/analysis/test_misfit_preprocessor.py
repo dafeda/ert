@@ -554,7 +554,7 @@ def test_independent_measurments_clustered_together_in_case_of_irregular_obs_err
     Suppose we have 100 independend observations r_1,r_2,...,r_100 with corresponding
     observation errors, where r_1 has a small error, and r_2,...,r_100 have large
     errors. The error-scaling step amplifies r_1's response and suppresses
-    r_2,...,r_100, leading to one cluser instead of 100 clusters. As a result, the
+    r_2,...,r_100, leading to one cluster instead of 100 clusters. As a result, the
     history matching update is defalted as if all 100 observations were
     perfectly correlated, even though they are all independent.
     """
