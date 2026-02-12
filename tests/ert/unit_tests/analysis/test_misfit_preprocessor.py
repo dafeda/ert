@@ -550,7 +550,7 @@ def test_independent_measurments_clustered_together_in_case_of_irregular_obs_err
     current clustering approach can lead to unintuitive results where independent
     observations are clustered together, and treated as correlated.
 
-    Senario:
+    Scenario:
     Suppose we have 100 independend observations r_1,r_2,...,r_100 with corresponding
     observation errors, where r_1 has a small error, and r_2,...,r_100 have large
     errors. The error-scaling step amplifies r_1's response and suppresses
