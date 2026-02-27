@@ -12,7 +12,7 @@ from ert.run_models.update_run_model import UpdateRunModel, UpdateRunModelConfig
 from ert.storage import Ensemble
 from ert.storage.local_experiment import ExperimentType
 
-from ..analysis import smoother_update
+from ..analysis import build_update_strategy_map, smoother_update
 from .run_model import ErtRunError
 
 logger = logging.getLogger(__name__)
@@ -70,6 +70,18 @@ class ManualUpdate(UpdateRunModel, ManualUpdateConfig):
     def update_ensemble_parameters(
         self, prior: Ensemble, posterior: Ensemble, weight: float
     ) -> None:
+        progress_callback = functools.partial(
+            self.send_smoother_event,
+            prior.iteration,
+            prior.id,
+        )
+        strategy_map = build_update_strategy_map(
+            es_settings=self.analysis_settings,
+            parameters=prior.experiment.update_parameters,
+            param_configs=prior.experiment.parameter_configuration,
+            rng=self._rng,
+            progress_callback=progress_callback,
+        )
         smoother_update(
             prior,
             posterior,
@@ -77,13 +89,9 @@ class ManualUpdate(UpdateRunModel, ManualUpdateConfig):
             es_settings=self.analysis_settings,
             parameters=prior.experiment.update_parameters,
             observations=prior.experiment.observation_keys,
+            strategy_map=strategy_map,
             global_scaling=weight,
-            rng=self._rng,
-            progress_callback=functools.partial(
-                self.send_smoother_event,
-                prior.iteration,
-                prior.id,
-            ),
+            progress_callback=progress_callback,
             active_realizations=self.active_realizations,
         )
 

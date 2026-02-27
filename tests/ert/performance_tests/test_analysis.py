@@ -7,7 +7,7 @@ import xarray as xr
 import xtgeo
 from scipy.ndimage import gaussian_filter
 
-from ert.analysis import smoother_update
+from ert.analysis import build_update_strategy_map, smoother_update
 from ert.config import ESSettings, Field, GenDataConfig, ObservationSettings
 from ert.field_utils import Shape
 
@@ -153,6 +153,14 @@ def test_and_benchmark_adaptive_localization_with_fields(
         prior_ensemble=prior_ensemble,
     )
 
+    es_settings = ESSettings(localization=True)
+    strategy_map = build_update_strategy_map(
+        es_settings=es_settings,
+        parameters=[param_group],
+        param_configs=prior_ensemble.experiment.parameter_configuration,
+        rng=np.random.default_rng(),
+        progress_callback=lambda _: None,
+    )
     smoother_update_run = partial(
         smoother_update,
         prior_ensemble,
@@ -160,7 +168,8 @@ def test_and_benchmark_adaptive_localization_with_fields(
         ["OBSERVATION"],
         [param_group],
         ObservationSettings(),
-        ESSettings(localization=True),
+        es_settings,
+        strategy_map,
     )
     benchmark(smoother_update_run)
 

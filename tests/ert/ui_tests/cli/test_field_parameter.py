@@ -13,7 +13,7 @@ import pytest
 import resfo
 import xtgeo
 
-from ert.analysis import smoother_update
+from ert.analysis import build_update_strategy_map, smoother_update
 from ert.config import ErtConfig, ESSettings, ObservationSettings
 from ert.mode_definitions import ENSEMBLE_SMOOTHER_MODE
 from ert.storage import open_storage
@@ -486,13 +486,22 @@ def test_field_param_update_using_heat_equation_zero_var_params_and_adaptive_loc
         with warnings.catch_warnings(record=True) as record:
             warnings.simplefilter("always")  # Ensure all warnings are always recorded
             with caplog.at_level(logging.INFO):
+                es_settings = ESSettings(localization=True)
+                parameters = list(config.ensemble_config.parameters)
                 smoother_update(
                     new_prior,
                     new_posterior,
                     experiment.observation_keys,
-                    config.ensemble_config.parameters,
+                    parameters,
                     ObservationSettings(),
-                    ESSettings(localization=True),
+                    es_settings,
+                    strategy_map=build_update_strategy_map(
+                        es_settings=es_settings,
+                        parameters=parameters,
+                        param_configs=new_prior.experiment.parameter_configuration,
+                        rng=np.random.default_rng(),
+                        progress_callback=lambda _: None,
+                    ),
                 )
 
                 # Note that this used to fail since run time and user warnings were

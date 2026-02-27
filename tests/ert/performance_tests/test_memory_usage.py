@@ -15,7 +15,7 @@ import pytest
 import xtgeo
 
 from ert.__main__ import run_convert_observations
-from ert.analysis import enif_update, smoother_update
+from ert.analysis import build_update_strategy_map, enif_update, smoother_update
 from ert.config import ErtConfig, ESSettings, ObservationSettings
 from ert.config._create_observation_dataframes import create_observation_dataframes
 from ert.mode_definitions import ENSEMBLE_SMOOTHER_MODE
@@ -66,13 +66,22 @@ def test_memory_smoothing(poly_template):
             prior_ensemble=prior_ens,
         )
         with memray.Tracker(poly_template / "memray.bin"):
+            parameters = list(ert_config.ensemble_config.parameters)
+            strategy_map = build_update_strategy_map(
+                es_settings=ESSettings(),
+                parameters=parameters,
+                param_configs=prior_ens.experiment.parameter_configuration,
+                rng=np.random.default_rng(),
+                progress_callback=lambda _: None,
+            )
             smoother_update(
                 prior_ens,
                 posterior_ens,
                 list(experiment.observation_keys),
-                list(ert_config.ensemble_config.parameters),
+                parameters,
                 ObservationSettings(),
                 ESSettings(),
+                strategy_map=strategy_map,
             )
 
     stats = memray._memray.compute_statistics(str(poly_template / "memray.bin"))

@@ -65,12 +65,14 @@ class GenKwOptions:
     update: bool = True
     # Deprecated – only kept to produce a helpful migration error.
     init_files: str | None = None
+    update_strategy: str = "STANDARD"
 
     @classmethod
     def from_raw(cls, raw: dict[str, str]) -> GenKwOptions:
         return cls(
             update=str_to_bool(raw.get("UPDATE", "TRUE")),
             init_files=raw.get("INIT_FILES"),
+            update_strategy=raw.get("UPDATE_STRATEGY", "STANDARD"),
         )
 
 
@@ -152,6 +154,18 @@ class GenKwConfig(ParameterConfig):
         parsed = cls._parse_from_config_list(config_list)
         gen_kw_key = parsed.gen_kw_key
         errors = []
+
+        raw_strategy = parsed.options.update_strategy.upper()
+        if raw_strategy not in {"STANDARD", "ADAPTIVE", "DISTANCE"}:
+            raise ConfigValidationError.with_context(
+                f"Invalid UPDATE_STRATEGY:{raw_strategy}, valid values are "
+                "STANDARD, ADAPTIVE, DISTANCE",
+                config_list,
+            )
+        update_strategy = cast(
+            Literal["STANDARD", "ADAPTIVE", "DISTANCE"], raw_strategy
+        )
+
         if parsed.options.init_files:
             raise ConfigValidationError.with_context(
                 "INIT_FILES with GEN_KW has been removed. "
@@ -205,6 +219,7 @@ class GenKwConfig(ParameterConfig):
                     ),
                     forward_init=False,
                     update=params[1] != "CONST" and parsed.options.update,
+                    update_strategy=update_strategy,
                 )
                 for params in distributions_spec
             ]

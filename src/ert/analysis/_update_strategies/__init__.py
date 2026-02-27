@@ -10,41 +10,32 @@ Strategy Lifecycle:
     3. Call strategy.update() for each parameter group
 
 Example usage:
+    from ert.analysis import build_update_strategy_map
     from ert.analysis._update_strategies import (
         StandardESUpdate,
         AdaptiveLocalizationUpdate,
         ObservationContext,
     )
 
-    # Create strategies with dependencies
+    # Option 1: Use the factory to build strategies from ESSettings
+    strategy_map = build_update_strategy_map(
+        es_settings, parameters, param_configs, rng, progress_callback
+    )
+
+    # Option 2: Build a custom strategy map for per-parameter control
     standard_strategy = StandardESUpdate(
-        smoother_snapshot, settings.inversion, settings.enkf_truncation,
-        rng, progress_callback,
+        settings.inversion, settings.enkf_truncation, rng, progress_callback
     )
     adaptive_strategy = AdaptiveLocalizationUpdate(
         settings.correlation_threshold, rng, progress_callback
     )
-
-    # Build strategy map (parameter_name -> strategy)
     strategy_map = {
         "PORO": adaptive_strategy,
         "PERM": standard_strategy,
     }
 
-    # Create observation context from preprocessed data
-    obs_context = ObservationContext(
-        responses=responses,
-        observation_values=obs_values,
-        observation_errors=obs_errors,
-    )
-
-    # Prepare strategies (called by perform_ensemble_update)
-    for strategy in set(strategy_map.values()):
-        strategy.prepare(obs_context)
-
-    # Update each parameter group
-    for param_group, strategy in strategy_map.items():
-        param_array = strategy.update(param_array, param_config, mask)
+    # Pass strategy_map to smoother_update
+    smoother_update(..., strategy_map=strategy_map)
 """
 
 from ._adaptive import AdaptiveLocalizationUpdate

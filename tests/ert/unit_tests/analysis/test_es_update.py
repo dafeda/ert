@@ -7,8 +7,13 @@ import polars as pl
 import pytest
 from tabulate import tabulate
 
-from ert.analysis import ErtAnalysisError, ObservationStatus, smoother_update
 from ert.analysis._es_update import _create_combined_ensemble_mask
+from ert.analysis import (
+    ErtAnalysisError,
+    ObservationStatus,
+    build_update_strategy_map,
+    smoother_update,
+)
 from ert.analysis._update_commons import (
     _compute_observation_statuses,
     _OutlierColumns,
@@ -23,6 +28,72 @@ from ert.config import (
     OutlierSettings,
 )
 from ert.storage import Ensemble, open_storage
+
+
+def _build_strategies(
+    prior: Ensemble,
+    parameters: list[str],
+    es_settings: ESSettings | None = None,
+    rng: np.random.Generator | None = None,
+    progress_callback=None,
+):
+    return build_update_strategy_map(
+        es_settings=es_settings or ESSettings(),
+        parameters=parameters,
+        param_configs=prior.experiment.parameter_configuration,
+        rng=rng or np.random.default_rng(),
+        progress_callback=progress_callback or (lambda _: None),
+    )
+
+
+@pytest.mark.parametrize(
+    ("strategy", "strategy_type"),
+    [
+        ("STANDARD", "StandardESUpdate"),
+        ("ADAPTIVE", "AdaptiveLocalizationUpdate"),
+    ],
+)
+def test_that_build_update_strategy_map_uses_parameter_strategy_overrides(
+    strategy, strategy_type
+):
+    param_name = "PARAM"
+    param_config = GenKwConfig(
+        name=param_name,
+        group="PARAMETER",
+        distribution={"name": "uniform", "min": 0, "max": 1},
+        update_strategy=strategy,
+    )
+    strategy_map = build_update_strategy_map(
+        es_settings=ESSettings(),
+        parameters=[param_name],
+        param_configs={param_name: param_config},
+        rng=np.random.default_rng(),
+        progress_callback=lambda _: None,
+    )
+
+    assert strategy_map[param_name].__class__.__name__ == strategy_type
+
+
+def test_that_distance_strategy_override_requires_field_or_surface_parameter_type():
+    param_name = "PARAM"
+    param_config = GenKwConfig(
+        name=param_name,
+        group="PARAMETER",
+        distribution={"name": "uniform", "min": 0, "max": 1},
+        update_strategy="DISTANCE",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="has strategy DISTANCE but is not FIELD or SURFACE",
+    ):
+        build_update_strategy_map(
+            es_settings=ESSettings(),
+            parameters=[param_name],
+            param_configs={param_name: param_config},
+            rng=np.random.default_rng(),
+            progress_callback=lambda _: None,
+        )
 
 
 @pytest.fixture
@@ -81,13 +152,20 @@ def test_update_report(
     )
     events = []
 
+    es_settings = ESSettings(inversion="SUBSPACE")
     smoother_update(
         prior_ens,
         posterior_ens,
         experiment.observation_keys,
         ert_config.ensemble_config.parameters,
         ObservationSettings(auto_scale_observations=misfit_preprocess),
-        ESSettings(inversion="SUBSPACE"),
+        es_settings,
+        strategy_map=_build_strategies(
+            prior_ens,
+            list(ert_config.ensemble_config.parameters),
+            es_settings,
+            progress_callback=events.append,
+        ),
         progress_callback=events.append,
     )
 
@@ -150,13 +228,20 @@ def test_update_report_with_different_observation_status_from_smoother_update(
     )
     events = []
 
+    es_settings = ESSettings(inversion="SUBSPACE")
     ss = smoother_update(
         prior_ens,
         posterior_ens,
         experiment.observation_keys,
         ert_config.ensemble_config.parameters,
         update_settings,
-        ESSettings(inversion="SUBSPACE"),
+        es_settings,
+        strategy_map=_build_strategies(
+            prior_ens,
+            list(ert_config.ensemble_config.parameters),
+            es_settings,
+            progress_callback=events.append,
+        ),
         progress_callback=events.append,
     )
 
@@ -289,6 +374,9 @@ def test_update_handles_precision_loss_in_std_dev(tmp_path):
             ["coeff_0"],
             ObservationSettings(auto_scale_observations=[["OBS*"]]),
             ESSettings(),
+            strategy_map=_build_strategies(
+                prior, ["coeff_0"], progress_callback=events.append
+            ),
             progress_callback=events.append,
         )
 
@@ -383,6 +471,7 @@ def test_update_raises_on_singular_matrix(tmp_path):
             prior_ensemble=prior,
         )
 
+        rng = np.random.default_rng(1234)
         with (
             pytest.raises(
                 ErtAnalysisError,
@@ -397,7 +486,7 @@ def test_update_raises_on_singular_matrix(tmp_path):
                 ["coeff_0"],
                 ObservationSettings(auto_scale_observations=[["OBS*"]]),
                 ESSettings(),
-                rng=np.random.default_rng(1234),
+                strategy_map=_build_strategies(prior, ["coeff_0"], rng=rng),
             )
 
 
@@ -442,14 +531,20 @@ def test_update_snapshot(
     # Make sure we always have the same seed in updates
     rng = np.random.default_rng(42)
 
+    es_settings = ESSettings(inversion="SUBSPACE")
     smoother_update(
         prior_ens,
         posterior_ens,
         experiment.observation_keys,
         list(ert_config.ensemble_config.parameters),
         ObservationSettings(),
-        ESSettings(inversion="SUBSPACE"),
-        rng=rng,
+        es_settings,
+        strategy_map=_build_strategies(
+            prior_ens,
+            list(ert_config.ensemble_config.parameters),
+            es_settings,
+            rng=rng,
+        ),
     )
 
     sim_gen_kw = list(
@@ -568,6 +663,7 @@ def test_smoother_snapshot_alpha(
     )
 
     with expectation:
+        es_settings = ESSettings(inversion="SUBSPACE")
         result_snapshot = smoother_update(
             prior_storage,
             posterior_storage,
@@ -576,8 +672,10 @@ def test_smoother_snapshot_alpha(
             update_settings=ObservationSettings(
                 outlier_settings=OutlierSettings(alpha=alpha)
             ),
-            es_settings=ESSettings(inversion="SUBSPACE"),
-            rng=rng,
+            es_settings=es_settings,
+            strategy_map=_build_strategies(
+                prior_storage, ["KEY_1"], es_settings, rng=rng
+            ),
         )
         assert result_snapshot.alpha == alpha
         assert (
@@ -613,6 +711,11 @@ def test_update_only_using_subset_observations(
         ert_config.ensemble_config.parameters,
         ObservationSettings(),
         ESSettings(),
+        strategy_map=_build_strategies(
+            prior_ens,
+            list(ert_config.ensemble_config.parameters),
+            progress_callback=events.append,
+        ),
         progress_callback=events.append,
     )
 
@@ -975,6 +1078,7 @@ def test_gen_data_obs_data_mismatch(storage, uniform_parameter):
             ["KEY_1"],
             ObservationSettings(),
             ESSettings(),
+            strategy_map=_build_strategies(prior, ["KEY_1"]),
         )
 
 
@@ -1036,6 +1140,9 @@ def test_gen_data_missing(storage, uniform_parameter, obs):
         ["KEY_1"],
         ObservationSettings(),
         ESSettings(),
+        strategy_map=_build_strategies(
+            prior, ["KEY_1"], progress_callback=events.append
+        ),
         progress_callback=events.append,
     )
 
@@ -1126,6 +1233,7 @@ def test_update_subset_parameters(storage, uniform_parameter, obs):
         ["KEY_1"],
         ObservationSettings(),
         ESSettings(),
+        strategy_map=_build_strategies(prior, ["KEY_1"]),
         active_realizations=active_realizations,
     )
 

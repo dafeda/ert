@@ -151,6 +151,7 @@ class AnalysisConfig:
                     value = new_value
 
                 var_name = "inversion"
+
             key = var_name.lower()
             try:
                 options[module_name][key] = value
@@ -173,6 +174,8 @@ class AnalysisConfig:
                 )
             )
 
+        es_settings = ESSettings()
+        obs_settings = ObservationSettings()
         try:
             es_settings = ESSettings(**options["STD_ENKF"])
             outlier_settings: dict[str, Any] = {

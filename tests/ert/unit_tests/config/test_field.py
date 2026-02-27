@@ -221,6 +221,21 @@ def test_init_transform_is_gotten_from_keyword(parse_field_line, transform):
     assert field.input_transformation == transform
 
 
+@pytest.mark.parametrize("strategy", ["STANDARD", "ADAPTIVE", "DISTANCE"])
+def test_that_field_strategy_is_gotten_from_keyword(parse_field_line, strategy):
+    field = parse_field_line(
+        f"FIELD f PARAMETER f.roff INIT_FILES:f%d.grdecl UPDATE_STRATEGY:{strategy}"
+    )
+    assert field.update_strategy == strategy
+
+
+def test_that_invalid_field_strategy_gives_config_validation_error(parse_field_line):
+    with pytest.raises(ConfigValidationError, match="FIELD UPDATE_STRATEGY:INVALID"):
+        parse_field_line(
+            "FIELD f PARAMETER f.roff INIT_FILES:f%d.grdecl UPDATE_STRATEGY:invalid"
+        )
+
+
 @pytest.mark.parametrize("transform", ["INIT_TRANSFORM", "OUTPUT_TRANSFORM"])
 def test_unknown_transform_functions_raises_a_config_error(parse_field_line, transform):
     with pytest.raises(

@@ -29,6 +29,35 @@ def test_short_definition_raises_config_error(tmp_path):
         )
 
 
+def test_that_gen_kw_strategy_is_gotten_from_keyword(tmp_path):
+    parameter_file = tmp_path / "parameter.txt"
+    parameter_file.write_text("KEY1 UNIFORM 0 1", encoding="utf-8")
+
+    result = GenKwConfig.from_config_list(
+        [
+            "GEN",
+            [str(parameter_file), parameter_file.read_text(encoding="utf-8")],
+            {"UPDATE_STRATEGY": "adaptive"},
+        ]
+    )
+
+    assert result[0].update_strategy == "ADAPTIVE"
+
+
+def test_that_invalid_gen_kw_strategy_gives_config_error(tmp_path):
+    parameter_file = tmp_path / "parameter.txt"
+    parameter_file.write_text("KEY1 UNIFORM 0 1", encoding="utf-8")
+
+    with pytest.raises(ConfigValidationError, match="Invalid UPDATE_STRATEGY:INVALID"):
+        GenKwConfig.from_config_list(
+            [
+                "GEN",
+                [str(parameter_file), parameter_file.read_text(encoding="utf-8")],
+                {"UPDATE_STRATEGY": "invalid"},
+            ]
+        )
+
+
 @pytest.mark.parametrize(
     ("spec", "expected"),
     [

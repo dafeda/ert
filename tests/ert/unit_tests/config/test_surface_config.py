@@ -206,6 +206,64 @@ def test_config_file_line_sets_the_corresponding_properties(
 
 
 @pytest.mark.usefixtures("use_tmpdir")
+@pytest.mark.parametrize("strategy", ["STANDARD", "ADAPTIVE", "DISTANCE"])
+def test_that_surface_strategy_is_gotten_from_keyword(strategy):
+    xtgeo.RegularSurface(
+        ncol=2,
+        nrow=3,
+        xori=4.0,
+        yori=5.0,
+        xinc=6.0,
+        yinc=7.0,
+        rotation=8.0,
+        yflip=-1,
+        values=[1.0] * 6,
+    ).to_file("base_surface.irap", fformat="irap_ascii")
+
+    surface_config = SurfaceConfig.from_config_list(
+        [
+            "TOP",
+            {
+                "BASE_SURFACE": "base_surface.irap",
+                "OUTPUT_FILE": "out.txt",
+                "INIT_FILES": "%dsurf.irap",
+                "UPDATE_STRATEGY": strategy,
+            },
+        ]
+    )
+
+    assert surface_config.update_strategy == strategy
+
+
+@pytest.mark.usefixtures("use_tmpdir")
+def test_that_invalid_surface_strategy_gives_config_validation_error():
+    xtgeo.RegularSurface(
+        ncol=2,
+        nrow=3,
+        xori=4.0,
+        yori=5.0,
+        xinc=6.0,
+        yinc=7.0,
+        rotation=8.0,
+        yflip=-1,
+        values=[1.0] * 6,
+    ).to_file("base_surface.irap", fformat="irap_ascii")
+
+    with pytest.raises(ConfigValidationError, match="Invalid UPDATE_STRATEGY:INVALID"):
+        SurfaceConfig.from_config_list(
+            [
+                "TOP",
+                {
+                    "BASE_SURFACE": "base_surface.irap",
+                    "OUTPUT_FILE": "out.txt",
+                    "INIT_FILES": "%dsurf.irap",
+                    "UPDATE_STRATEGY": "invalid",
+                },
+            ]
+        )
+
+
+@pytest.mark.usefixtures("use_tmpdir")
 def test_invalid_surface_files_gives_config_error():
     Path("base_surface.irap").write_text("not valid irap", encoding="utf-8")
     with pytest.raises(

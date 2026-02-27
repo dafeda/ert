@@ -39,7 +39,7 @@ from .snapshots import ObservationStatus, SmootherSnapshot
 if TYPE_CHECKING:
     import numpy.typing as npt
 
-    from ert.config import ESSettings
+    from ert.config import ESSettings, ParameterConfig
     from ert.storage import Ensemble
 
 logger = logging.getLogger(__name__)
@@ -245,6 +245,86 @@ def perform_ensemble_update(
     )
 
 
+def build_update_strategy_map(
+    es_settings: ESSettings,
+    parameters: Iterable[str],
+    param_configs: dict[str, ParameterConfig],
+    rng: np.random.Generator,
+    progress_callback: Callable[[AnalysisEvent], None],
+) -> dict[str, UpdateStrategy]:
+    """Build a mapping from parameter group names to update strategies.
+
+    Constructs update strategies based on the ES settings and parameter types.
+    This factory can be called by users who want to customise which strategy
+    is applied to each parameter group.
+
+    Parameters
+    ----------
+    es_settings : ESSettings
+        ES settings controlling update behavior (localization mode, etc.).
+    parameters : Iterable[str]
+        Names of parameter groups to create strategies for.
+    param_configs : dict[str, ParameterConfig]
+        Mapping from parameter group name to its configuration.
+    rng : np.random.Generator
+        Random number generator for reproducibility.
+    progress_callback : Callable[[AnalysisEvent], None]
+        Callback for reporting progress.
+
+    Returns
+    -------
+    dict[str, UpdateStrategy]
+        Mapping from parameter group name to its update strategy.
+    """
+    strategy_map: dict[str, UpdateStrategy] = {}
+
+    standard_strategy = StandardESUpdate(
+        es_settings.inversion, es_settings.enkf_truncation, rng, progress_callback
+    )
+    adaptive_strategy = AdaptiveLocalizationUpdate(
+        es_settings.correlation_threshold, rng, progress_callback
+    )
+    field_distance_strategy = DistanceLocalizationUpdate(rng, Field, progress_callback)
+    surface_distance_strategy = DistanceLocalizationUpdate(
+        rng, SurfaceConfig, progress_callback
+    )
+
+    def _resolve_override_strategy(
+        param_name: str, param_cfg: ParameterConfig
+    ) -> UpdateStrategy:
+        override = param_cfg.update_strategy
+        if override is None:
+            if es_settings.distance_localization:
+                if isinstance(param_cfg, Field):
+                    return field_distance_strategy
+                if isinstance(param_cfg, SurfaceConfig):
+                    return surface_distance_strategy
+                return standard_strategy
+            if es_settings.localization:
+                return adaptive_strategy
+            return standard_strategy
+
+        if override == "STANDARD":
+            return standard_strategy
+        if override == "ADAPTIVE":
+            return adaptive_strategy
+        if isinstance(param_cfg, Field):
+            return field_distance_strategy
+        if isinstance(param_cfg, SurfaceConfig):
+            return surface_distance_strategy
+
+        raise ValueError(
+            "Parameter "
+            f"'{param_name}' has strategy DISTANCE but is not FIELD or SURFACE"
+        )
+
+    for param_name in parameters:
+        param_cfg = param_configs[param_name]
+        strategy_map[param_name] = _resolve_override_strategy(param_name, param_cfg)
+
+    return strategy_map
+
+
 def smoother_update(
     prior_storage: Ensemble,
     posterior_storage: Ensemble,
@@ -252,15 +332,13 @@ def smoother_update(
     parameters: Iterable[str],
     update_settings: ObservationSettings,
     es_settings: ESSettings,
-    rng: np.random.Generator | None = None,
+    strategy_map: dict[str, UpdateStrategy],
     progress_callback: Callable[[AnalysisEvent], None] | None = None,
     global_scaling: float = 1.0,
     active_realizations: list[bool] | None = None,
 ) -> SmootherSnapshot:
     if not progress_callback:
         progress_callback = noop_progress_callback
-    if rng is None:
-        rng = np.random.default_rng()
 
     ens_mask = prior_storage.get_realization_mask_with_responses()
     ens_mask = _create_combined_ensemble_mask(ens_mask, active_realizations)
@@ -272,54 +350,6 @@ def smoother_update(
         std_cutoff=update_settings.outlier_settings.std_cutoff,
         global_scaling=global_scaling,
     )
-
-    # Create strategies based on settings and parameter types
-    param_configs = prior_storage.experiment.parameter_configuration
-    strategy_map: dict[str, UpdateStrategy] = {}
-
-    if es_settings.distance_localization:
-        # Distance localization: Field/Surface use distance strategy,
-        # others use standard ES
-        field_strategy = DistanceLocalizationUpdate(rng, Field, progress_callback)
-        surface_strategy = DistanceLocalizationUpdate(
-            rng, SurfaceConfig, progress_callback
-        )
-        standard_strategy = StandardESUpdate(
-            smoother_snapshot,
-            es_settings.inversion,
-            es_settings.enkf_truncation,
-            rng,
-            progress_callback,
-        )
-
-        for param_name in parameters:
-            param_cfg = param_configs[param_name]
-            if isinstance(param_cfg, Field):
-                strategy_map[param_name] = field_strategy
-            elif isinstance(param_cfg, SurfaceConfig):
-                strategy_map[param_name] = surface_strategy
-            else:
-                strategy_map[param_name] = standard_strategy
-
-    elif es_settings.localization:
-        # Adaptive localization for all parameters
-        adaptive_strategy = AdaptiveLocalizationUpdate(
-            es_settings.correlation_threshold, rng, progress_callback
-        )
-        for param_name in parameters:
-            strategy_map[param_name] = adaptive_strategy
-
-    else:
-        # Standard ES for all parameters
-        standard_strategy = StandardESUpdate(
-            smoother_snapshot,
-            es_settings.inversion,
-            es_settings.enkf_truncation,
-            rng,
-            progress_callback,
-        )
-        for param_name in parameters:
-            strategy_map[param_name] = standard_strategy
 
     try:
         with warnings.catch_warnings():

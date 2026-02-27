@@ -80,7 +80,15 @@ class SurfaceConfig(ParameterConfig):
         base_surface = options.get("BASE_SURFACE")
         forward_init = str_to_bool(options.get("FORWARD_INIT", "FALSE"))
         update_parameter = str_to_bool(options.get("UPDATE", "TRUE"))
+        update_strategy = options.get("UPDATE_STRATEGY", "DISTANCE").upper()
         errors = []
+        if update_strategy not in {"STANDARD", "ADAPTIVE", "DISTANCE"}:
+            errors.append(
+                ErrorInfo(
+                    f"Invalid UPDATE_STRATEGY:{update_strategy}, valid values are "
+                    "STANDARD, ADAPTIVE, DISTANCE"
+                ).set_context(config_list)
+            )
         if not out_file:
             errors.append(
                 ErrorInfo("Missing required OUTPUT_FILE").set_context(config_list)
@@ -132,6 +140,7 @@ class SurfaceConfig(ParameterConfig):
             output_file=Path(out_file),
             base_surface_path=base_surface,
             update=update_parameter,
+            update_strategy=update_strategy,
         )
 
     def __len__(self) -> int:

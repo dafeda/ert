@@ -73,9 +73,11 @@ class Field(ParameterConfig):
         output_transform = options.get("OUTPUT_TRANSFORM")
         input_transform = options.get("INPUT_TRANSFORM")
         update_parameter = str_to_bool(options.get("UPDATE", "TRUE"))
+        update_strategy = options.get("UPDATE_STRATEGY", "DISTANCE").upper()
         min_ = options.get("MIN")
         max_ = options.get("MAX")
         init_files = options.get("INIT_FILES")
+        errors = []
         if input_transform:
             ConfigWarning.warn(
                 f"Got INPUT_TRANSFORM for FIELD: {name}, "
@@ -83,7 +85,14 @@ class Field(ParameterConfig):
                 config_list,
             )
 
-        errors = []
+        if update_strategy not in {"STANDARD", "ADAPTIVE", "DISTANCE"}:
+            errors.append(
+                ConfigValidationError.with_context(
+                    f"FIELD UPDATE_STRATEGY:{update_strategy} is invalid, "
+                    "valid values are STANDARD, ADAPTIVE, DISTANCE",
+                    config_list,
+                )
+            )
 
         if init_transform and init_transform not in TRANSFORM_FUNCTIONS:
             errors.append(
@@ -167,6 +176,7 @@ class Field(ParameterConfig):
             output_file=out_file,
             grid_file=os.path.abspath(grid_file_path),
             update=update_parameter,
+            update_strategy=update_strategy,
         )
 
     def __len__(self) -> int:

@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from enum import StrEnum, auto
 from hashlib import sha256
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import networkx as nx
 import numpy as np
@@ -44,6 +44,7 @@ class ParameterConfig(BaseModel):
     name: str
     forward_init: bool
     update: bool
+    update_strategy: Literal["STANDARD", "ADAPTIVE", "DISTANCE"] | None = None
 
     @property
     @abstractmethod

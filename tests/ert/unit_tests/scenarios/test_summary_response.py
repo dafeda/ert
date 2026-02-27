@@ -9,11 +9,21 @@ import pandas as pd
 import pytest
 from resdata.summary import Summary
 
-from ert.analysis import ErtAnalysisError, smoother_update
+from ert.analysis import ErtAnalysisError, build_update_strategy_map, smoother_update
 from ert.config import ErtConfig, ESSettings, ObservationSettings
 from ert.data import MeasuredData
 from ert.sample_prior import sample_prior
 from ert.storage.local_ensemble import load_parameters_and_responses_from_runpath
+
+
+def _build_strategies(prior, parameters, es_settings=None):
+    return build_update_strategy_map(
+        es_settings=es_settings or ESSettings(),
+        parameters=parameters,
+        param_configs=prior.experiment.parameter_configuration,
+        rng=np.random.default_rng(),
+        progress_callback=lambda _: None,
+    )
 
 
 @pytest.fixture
@@ -121,6 +131,9 @@ def test_that_reading_matching_time_is_ok(ert_config, storage, prior_ensemble):
         ert_config.ensemble_config.parameters,
         ObservationSettings(),
         ESSettings(),
+        strategy_map=_build_strategies(
+            prior_ensemble, list(ert_config.ensemble_config.parameters)
+        ),
     )
 
 
@@ -156,6 +169,9 @@ def test_that_mismatched_responses_give_error(ert_config, storage, prior_ensembl
             ert_config.ensemble_config.parameters,
             ObservationSettings(),
             ESSettings(),
+            strategy_map=_build_strategies(
+                prior_ensemble, list(ert_config.ensemble_config.parameters)
+            ),
         )
 
 
@@ -195,6 +211,9 @@ def test_that_different_length_is_ok_as_long_as_observation_time_exists(
         ert_config.ensemble_config.parameters,
         ObservationSettings(),
         ESSettings(),
+        strategy_map=_build_strategies(
+            prior_ensemble, list(ert_config.ensemble_config.parameters)
+        ),
     )
 
 
@@ -249,6 +268,9 @@ def test_that_duplicate_summary_time_steps_does_not_fail(
         ert_config.ensemble_config.parameters,
         ObservationSettings(),
         ESSettings(),
+        strategy_map=_build_strategies(
+            prior_ensemble, list(ert_config.ensemble_config.parameters)
+        ),
     )
 
 

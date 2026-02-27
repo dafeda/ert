@@ -9,7 +9,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from ert.analysis import enif_update, smoother_update
+from ert.analysis import build_update_strategy_map, enif_update, smoother_update
 from ert.config import (
     ESSettings,
     GenDataConfig,
@@ -533,6 +533,13 @@ def setup_es_benchmark(tmp_path, request):
 def test_memory_performance_of_doing_es_update(setup_es_benchmark, tmp_path):
     _, prior, posterior, gen_kw_names, expected_performance = setup_es_benchmark
     with memray.Tracker(tmp_path / "memray.bin"):
+        strategy_map = build_update_strategy_map(
+            es_settings=ESSettings(),
+            parameters=gen_kw_names,
+            param_configs=prior.experiment.parameter_configuration,
+            rng=np.random.default_rng(),
+            progress_callback=lambda _: None,
+        )
         smoother_update(
             prior,
             posterior,
@@ -540,6 +547,7 @@ def test_memory_performance_of_doing_es_update(setup_es_benchmark, tmp_path):
             gen_kw_names,
             ObservationSettings(),
             ESSettings(),
+            strategy_map=strategy_map,
         )
 
     stats = memray._memray.compute_statistics(str(tmp_path / "memray.bin"))
@@ -554,6 +562,13 @@ def test_speed_performance_of_doing_es_update(setup_es_benchmark, benchmark):
         pytest.skip()
 
     def run():
+        strategy_map = build_update_strategy_map(
+            es_settings=ESSettings(),
+            parameters=gen_kw_names,
+            param_configs=prior.experiment.parameter_configuration,
+            rng=np.random.default_rng(),
+            progress_callback=lambda _: None,
+        )
         smoother_update(
             prior,
             posterior,
@@ -561,6 +576,7 @@ def test_speed_performance_of_doing_es_update(setup_es_benchmark, benchmark):
             gen_kw_names,
             ObservationSettings(),
             ESSettings(),
+            strategy_map=strategy_map,
         )
 
     benchmark(run)

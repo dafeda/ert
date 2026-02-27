@@ -5,7 +5,11 @@ from .analysis_config import (
     ObservationSettings,
     OutlierSettings,
 )
-from .analysis_module import AnalysisModule, ESSettings, InversionTypeES
+from .analysis_module import (
+    AnalysisModule,
+    ESSettings,
+    InversionTypeES,
+)
 from .breakthrough_config import BreakthroughConfig
 from .capture_validation import capture_validation
 from .derived_response_config import DerivedResponseConfig
