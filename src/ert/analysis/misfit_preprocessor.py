@@ -3,142 +3,130 @@ import logging
 import numpy as np
 import numpy.typing as npt
 from scipy.cluster.hierarchy import fcluster, linkage
-from scipy.stats import spearmanr
+from scipy.spatial.distance import squareform
+from sklearn.covariance import LedoitWolf  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
 
-
-def get_scaling_factor(nr_observations: int, nr_components: int) -> float:
-    """Calculates an observation scaling factor which is
-    sqrt(nr_observations / nr_components)
-
-    Args:
-        nr_observations is the number of observations
-        nr_components is the number of primary components from PCA analysis
-            below a user threshold
-    """
-    if nr_components == 0:
-        nr_components = 1
-        logger.warning(
-            "Number of PCA components is 0. "
-            "Setting to 1 to avoid division by zero "
-            "when calculating scaling factor"
-        )
-
-    return np.sqrt(nr_observations / float(nr_components))
+# |rho| = 0.7 corresponds to R^2 ~ 0.49, i.e. roughly 50 % shared variance.
+# This is the conventional boundary for "strong" correlation in statistics
+# and a natural threshold: above it observations are more redundant than not,
+# below it they are more independent than not.  Combined with complete linkage
+# (every pair in a cluster must exceed this) the effective within-cluster
+# correlations are well above 0.7, producing meaningful Kish scaling factors.
+DEFAULT_MIN_ABS_CORRELATION = 0.7
 
 
-def get_nr_primary_components(
-    responses: npt.NDArray[np.float64], threshold: float
-) -> int:
-    """
-    Calculate the number of principal components required
-    to explain a given amount of variance in the responses.
+def ledoit_wolf_correlation(
+    X: npt.NDArray[np.float64],
+) -> npt.NDArray[np.float64]:
+    """Compute a shrunk correlation matrix using sklearn's Ledoit-Wolf
+    covariance estimator, then standardize to correlation.
 
     Args:
-    responses: A 2D array of data with shape
-        (n_realizations, n_observations).
-    threshold: The cumulative variance threshold to meet or exceed.
-        For example, a value of 0.95 will find the number of
-        components needed to explain at least 95% of the total variance.
+        X: Data matrix of shape (n_samples, n_features).
 
     Returns:
-        The minimum number of principal components required to meet or exceed
-        the specified variance threshold.
+        Correlation matrix of shape (n_features, n_features).
     """
-    data_matrix = responses - responses.mean(axis=0)
-    _, singulars, _ = np.linalg.svd(data_matrix.astype(float), full_matrices=False)
-    # Calculate cumulative variance ratio:
-    # Squared singular values are proportional to variance explained by each principal
-    # component. We compute the cumulative sum of these, then divide by their total
-    # sum to get the cumulative proportion of variance explained by each successive
-    # component.
-    variance_ratio = np.cumsum(singulars**2) / np.sum(singulars**2)
-
-    num_components = np.searchsorted(variance_ratio, threshold, side="left") + 1
-
-    return int(num_components)
+    shrunk_cov = LedoitWolf().fit(X).covariance_
+    std = np.sqrt(np.diag(shrunk_cov))
+    zero_var = std == 0.0
+    std = np.maximum(std, 1e-10)
+    corr = shrunk_cov / np.outer(std, std)
+    corr[zero_var, :] = 0.0
+    corr[:, zero_var] = 0.0
+    np.fill_diagonal(corr, 1.0)
+    return corr
 
 
 def cluster_responses(
-    responses: npt.NDArray[np.float64],
-    nr_clusters: int,
+    correlation: npt.NDArray[np.float64],
+    min_abs_correlation: float = DEFAULT_MIN_ABS_CORRELATION,
 ) -> npt.NDArray[np.int_]:
+    """Cluster observations using a correlation-threshold cut.
+
+    The distance is defined as d = 1 - |correlation|. The hierarchical tree
+    is built with complete linkage, then cut at the distance threshold
+    t = 1 - min_abs_correlation. This yields clusters where members are only
+    merged when their within-cluster correlation structure remains above the
+    requested minimum absolute correlation.
+
+    Args:
+        correlation: Correlation matrix of shape
+            (n_observations, n_observations).
+        min_abs_correlation: Minimum absolute correlation required for
+            observations to be grouped together. Must lie in [0.0, 1.0].
+
+    Returns:
+        Array of cluster assignments for each observation.
     """
-    Cluster responses using hierarchical clustering based on Spearman correlation.
-    Observations that tend to vary similarly across different simulation runs will
-    be clustered together.
+    if not 0.0 <= min_abs_correlation <= 1.0:
+        raise ValueError("min_abs_correlation must be between 0.0 and 1.0")
+
+    distance_matrix = 1.0 - np.abs(correlation)
+    # Self-distance must be exactly zero.
+    np.fill_diagonal(distance_matrix, 0.0)
+    condensed_dist = squareform(distance_matrix, checks=False)
+    linkage_matrix = linkage(condensed_dist, method="complete")
+    distance_threshold = 1.0 - min_abs_correlation
+    return fcluster(linkage_matrix, t=distance_threshold, criterion="distance")
+
+
+def get_kish_scaling_factor(
+    correlation: npt.NDArray[np.float64],
+) -> float:
+    """Compute the scaling factor using Kish's design effect formula.
+
+    For a cluster with correlation matrix C:
+        rho_bar = mean absolute off-diagonal correlation
+        gamma = 1 + (N - 1) * rho_bar
+        scaling_factor = sqrt(gamma)
+
+    Args:
+        correlation: Correlation sub-matrix for a single cluster,
+            shape (n_cluster, n_cluster).
+
+    Returns:
+        sqrt(gamma), the observation-error inflation factor.
     """
-    correlation = spearmanr(responses).statistic
-    if isinstance(correlation, np.float64):
-        correlation = np.array([[1, correlation], [correlation, 1]])
-    # Take absolute value to cluster based on correlation strength rather
-    # than direction.
-    # This ensures that strong negative correlations (-0.9) are
-    # treated as similar to
-    # strong positive correlations (+0.9), since both represent
-    # strong relationships.
-    correlation = np.abs(correlation)
-    linkage_matrix = linkage(correlation, "average", "euclidean")
-    return fcluster(linkage_matrix, nr_clusters, criterion="maxclust")
+    n = correlation.shape[0]
+    if n <= 1:
+        return 1.0
+    abs_corr = np.abs(correlation)
+    off_diag_sum = np.sum(abs_corr) - n  # subtract diagonal (all 1s)
+    rho_bar = off_diag_sum / (n * (n - 1))
+    gamma = 1.0 + (n - 1) * rho_bar
+    return float(np.sqrt(gamma))
 
 
 def main(
     responses: npt.NDArray[np.float64],
     obs_errors: npt.NDArray[np.float64],
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.int_], npt.NDArray[np.int_]]:
+    min_abs_correlation: float = DEFAULT_MIN_ABS_CORRELATION,
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.int_]]:
     """
-    Perform 'Auto Scaling' to mitigate issues with correlated observations in ensemble
-    smoothers.
-
-    This method was developed internally to address challenges with correlated
-    observations in ensemble smoothers, which can lead to overconfident updates.
-    Originally named 'Misfit Preprocessor', it was renamed to 'Auto Scaling' as
-    it doesn't calculate misfits.
+    Perform 'Auto Scaling' to mitigate issues with correlated observations
+    in ensemble smoothers.
 
     The procedure involves several steps:
 
-    1. Response Scaling:
-        Each response is divided by its observation error to normalize by uncertainty.
-        This scales down uncertain observations (large errors) and scales up
-        reliable observations (small errors), putting all responses on a
-        comparable scale for clustering and PCA analysis.
-    2. PCA for Dimensionality Estimation:
-        PCA is performed on the centered and scaled
-        responses to estimate the intrinsic dimensionality of the data.
-        The number of principal components that cumulatively explain a predefined
-        percentage of variance (e.g., 95%) is determined.
-    3. Hierarchical Clustering:
-        Based on the dimensionality estimated by PCA,
-        a hierarchical clustering is performed using the Spearman correlation
-        matrix of the scaled responses.
-        Clustering is done to identify groups of observations with similar variation
-        patterns. Using the number of principal components as the number of clusters
-        is not a widely common technique in clustering analysis.
-        Potential rationale (the creator of method did not document the reasoning
-        behind the method):
-        The number of principal components to explain 95% of the variance can be seen as
-        an estimate of the intrinsic dimensionality of the data.
-        Using this as the number of clusters assumes that each major direction of
-        variance could correspond to a distinct cluster.
-        This methods allows the number of clusters to be data-driven rather than
-        pre-determined, which can be advantageous in some scenarios.
-        One potential issue is that data can have a certain number of significant
-        dimension but a different number of natural clusters.
-    4. Cluster-Based PCA and Scaling:
-        For each cluster, PCA is performed to determine the number of principal
-        components that explain a specified percentage of variance within that cluster.
-        A scaling factor for the observation errors is then calculated as the square
-        root of the ratio of the number of observations in the cluster to the number
-        of principal components. The specific formula used is not a standard approach,
-        but may nevertheless be reasonable. If N responses are perfectly correlated,
-        the number of principal components will be 1, resulting in a scaling factor
-        of sqrt(N). According to statistical theory, this is the correct scaling factor
-        to use when N responses are perfectly correlated, as it ensures the accumulated
-        weight (precision) of the N copies equals that of a single independent
-        observation. The term sqrt(N/N_eff), where N_eff is the number of principal
-        components (effective independent samples), can be interpreted as an
-        adjustment for the effective sample size.
+    1. Correlation Estimation:
+        A shrunk covariance matrix is estimated using sklearn's Ledoit-Wolf
+        estimator, then standardized to a correlation matrix. This is more
+        robust than the sample correlation when the number of realizations
+        is small relative to the number of observations.
+    2. Threshold-Based Clustering:
+        Hierarchical clustering is performed with distance
+        d = 1 - |correlation| and complete linkage. The tree is cut at
+        the threshold t = 1 - min_abs_correlation so that only sufficiently
+        correlated observations are grouped together.
+    3. Kish Scaling:
+        For each cluster, Kish's design effect formula is used to compute
+        the effective sample size from the mean absolute off-diagonal
+        correlation within the cluster. The scaling factor
+        sqrt(1 + (N-1)*rho_bar) inflates observation errors to account
+        for redundancy.
 
     Parameters:
     -----------
@@ -146,40 +134,36 @@ def main(
         2D array of response data. Shape: (n_observations, n_realizations)
     obs_errors : npt.NDArray[np.float_]
         1D array of observation errors. Length: n_observations
+    min_abs_correlation : float
+        Minimum absolute correlation required for observations to be placed
+        in the same cluster.
 
     Returns:
     --------
-    Tuple[npt.NDArray[np.float_], npt.NDArray[np.int_], npt.NDArray[np.int_]]
+    Tuple[npt.NDArray[np.float_], npt.NDArray[np.int_]]
         - scale_factors: Array of scaling factors for observation errors
         - clusters: Array of cluster assignments for each observation
-        - nr_components: Array of the number of principal components for each
-          observation
     """
-    scale_factors = np.ones(len(obs_errors))
-    nr_components = np.ones(len(obs_errors), dtype=int)
-    scaled_responses = (
-        responses - responses.mean(axis=1).reshape(-1, 1)
-    ) / responses.std(axis=1).reshape(-1, 1)
+    nr_obs = len(obs_errors)
+    scale_factors = np.ones(nr_obs)
 
-    if len(obs_errors) <= 2:
+    if nr_obs <= 2:
         logger.info("Observations not correlated or only correlated each other")
-        return scale_factors, np.ones(len(obs_errors), dtype=int), nr_components
+        return scale_factors, np.ones(nr_obs, dtype=int)
 
-    prim_components = get_nr_primary_components(scaled_responses.T, threshold=0.95)
-    clusters = cluster_responses(scaled_responses.T, nr_clusters=prim_components)
+    correlation = ledoit_wolf_correlation(responses.T)
+
+    clusters = cluster_responses(correlation, min_abs_correlation)
 
     for cluster in np.unique(clusters):
         index = np.where(clusters == cluster)[0]
         if len(index) == 1:
-            # Not correlated to anything
-            components = 1
-        else:
-            components = get_nr_primary_components(
-                scaled_responses[index].T, threshold=0.95
-            )
-            components = 1 if components == 0 else components
-        scale_factor = get_scaling_factor(len(index), components)
-        nr_components[index] *= components
-        scale_factors[index] *= scale_factor
-    logger.info(f"Calculated scaling factors for {len(scale_factors)} clusters")
-    return scale_factors, clusters, nr_components
+            continue
+        sub_corr = correlation[np.ix_(index, index)]
+        scale_factor = get_kish_scaling_factor(sub_corr)
+        scale_factors[index] = scale_factor
+    logger.info(
+        f"Calculated scaling factors for {nr_obs} observations "
+        f"in {len(np.unique(clusters))} clusters"
+    )
+    return scale_factors, clusters

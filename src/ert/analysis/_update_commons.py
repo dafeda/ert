@@ -128,7 +128,7 @@ def _auto_scale_observations(
         logger.info(f"Scaling observation group: {group}")
 
         data_for_obs = observations_and_responses.filter(obs_group_mask)
-        scaling_factors, clusters, nr_components = misfit_preprocessor.main(
+        scaling_factors, clusters = misfit_preprocessor.main(
             data_for_obs.select(active_realizations).to_numpy(),
             data_for_obs.select(_OutlierColumns.scaled_std).to_numpy(),
         )
@@ -154,7 +154,6 @@ def _auto_scale_observations(
                         "Observation",
                         "Index",
                         "Cluster",
-                        "Nr components",
                         "Scaling factor",
                     ],
                     data=np.array(
@@ -162,7 +161,6 @@ def _auto_scale_observations(
                             data_for_obs["observation_key"].to_numpy(),
                             data_for_obs["index"],
                             clusters,
-                            nr_components.astype(int),
                             scaling_factors,
                         )
                     ).T,  # type: ignore

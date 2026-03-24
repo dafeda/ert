@@ -17,7 +17,11 @@ resolution-markers = [
 ]
 
 [options]
+<<<<<<< HEAD
 exclude-newer = "2026-03-30T08:41:22.223114519Z"
+=======
+exclude-newer = "2026-03-18T05:10:57.018225Z"
+>>>>>>> f11caff558 (Commitin)
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
@@ -1084,6 +1088,7 @@ dependencies = [
     { name = "ropt", extra = ["pandas"] },
     { name = "ropt-dakota" },
     { name = "ruamel-yaml" },
+    { name = "scikit-learn" },
     { name = "scipy" },
     { name = "seaborn" },
     { name = "surfio" },
@@ -1197,6 +1202,7 @@ requires-dist = [
     { name = "ropt", extras = ["pandas"], specifier = ">=0.26,<0.27" },
     { name = "ropt-dakota", specifier = ">=0.26,<0.27" },
     { name = "ruamel-yaml" },
+    { name = "scikit-learn" },
     { name = "scipy", specifier = ">=1.10.1" },
     { name = "seaborn" },
     { name = "surfio", specifier = ">=0.0.11" },
