@@ -70,10 +70,9 @@ def test_memory_smoothing(poly_template):
         )
         with memray.Tracker(poly_template / "memray.bin"):
             smoother_update(
-                prior_ens,
-                posterior_ens,
-                list(experiment.observation_keys),
-                ObservationSettings(),
+                prior_storage=prior_ens,
+                posterior_storage=posterior_ens,
+                update_settings=ObservationSettings(),
             )
 
     stats = memray._memray.compute_statistics(str(poly_template / "memray.bin"))
@@ -96,11 +95,10 @@ def test_memory_enif_update(poly_template):
         )
         with memray.Tracker(poly_template / "memray.bin"):
             enif_update(
-                prior_ens,
-                posterior_ens,
-                list(experiment.observation_keys),
-                list(ert_config.ensemble_config.parameters),
-                1234567,
+                prior_storage=prior_ens,
+                posterior_storage=posterior_ens,
+                parameters=list(ert_config.ensemble_config.parameters),
+                random_seed=1234567,
             )
 
     stats = memray._memray.compute_statistics(str(poly_template / "memray.bin"))

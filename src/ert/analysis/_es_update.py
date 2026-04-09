@@ -349,7 +349,6 @@ def build_strategy_map(
 def smoother_update(
     prior_storage: Ensemble,
     posterior_storage: Ensemble,
-    observations: Iterable[str],
     update_settings: ObservationSettings,
     strategy_map: dict[str, UpdateStrategy] | None = None,
     progress_callback: Callable[[AnalysisEvent], None] | None = None,
@@ -406,7 +405,7 @@ def smoother_update(
 
             warnings.showwarning = log_warning
             smoother_snapshot = perform_ensemble_update(
-                observations,
+                prior_storage.experiment.observation_keys,
                 update_settings,
                 global_scaling,
                 ens_mask,

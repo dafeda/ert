@@ -534,10 +534,9 @@ def test_memory_performance_of_doing_es_update(setup_es_benchmark, tmp_path):
     _, prior, posterior, _, expected_performance = setup_es_benchmark
     with memray.Tracker(tmp_path / "memray.bin"):
         smoother_update(
-            prior,
-            posterior,
-            prior.experiment.observation_keys,
-            ObservationSettings(),
+            prior_storage=prior,
+            posterior_storage=posterior,
+            update_settings=ObservationSettings(),
         )
 
     stats = memray._memray.compute_statistics(str(tmp_path / "memray.bin"))
@@ -553,10 +552,9 @@ def test_speed_performance_of_doing_es_update(setup_es_benchmark, benchmark):
 
     def run():
         smoother_update(
-            prior,
-            posterior,
-            prior.experiment.observation_keys,
-            ObservationSettings(),
+            prior_storage=prior,
+            posterior_storage=posterior,
+            update_settings=ObservationSettings(),
         )
 
     benchmark(run)
@@ -570,11 +568,10 @@ def test_memory_performance_of_doing_enif_update(setup_es_benchmark, tmp_path):
     _, prior, posterior, gen_kw_names, expected_performance = setup_es_benchmark
     with memray.Tracker(tmp_path / "memray.bin"):
         enif_update(
-            prior,
-            posterior,
-            prior.experiment.observation_keys,
-            gen_kw_names,
-            12345,
+            prior_storage=prior,
+            posterior_storage=posterior,
+            parameters=gen_kw_names,
+            random_seed=12345,
         )
 
     stats = memray._memray.compute_statistics(str(tmp_path / "memray.bin"))
@@ -590,11 +587,10 @@ def test_speed_performance_of_doing_enif_update(setup_es_benchmark, benchmark):
 
     def run():
         enif_update(
-            prior,
-            posterior,
-            prior.experiment.observation_keys,
-            gen_kw_names,
-            123456789,
+            prior_storage=prior,
+            posterior_storage=posterior,
+            parameters=gen_kw_names,
+            random_seed=123456789,
         )
 
     benchmark(run)

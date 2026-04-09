@@ -39,7 +39,6 @@ from .snapshots import (
 def enif_update(
     prior_storage: Ensemble,
     posterior_storage: Ensemble,
-    observations: Iterable[str],
     parameters: Iterable[str],
     random_seed: int,
     progress_callback: Callable[[AnalysisEvent], None] | None = None,
@@ -60,7 +59,7 @@ def enif_update(
     try:
         analysis_EnIF(
             parameters,
-            observations,
+            prior_storage.experiment.observation_keys,
             random_seed,
             smoother_snapshot,
             ens_mask,
