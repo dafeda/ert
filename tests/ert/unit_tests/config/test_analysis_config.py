@@ -9,9 +9,11 @@ from hypothesis import given
 
 from ert.config import (
     AnalysisConfig,
+    AnalysisParameterType,
     ConfigValidationError,
     ErtConfig,
     ESSettings,
+    ParameterUpdateStrategy,
 )
 from ert.config.parsing import ConfigKeys, ConfigWarning
 
@@ -237,6 +239,22 @@ def test_analysis_config_modules(analysis_config):
     assert isinstance(analysis_config.es_settings, ESSettings)
 
 
+def test_that_empty_parameter_type_update_strategies_are_omitted_from_serialization():
+    assert "parameter_update_strategies" not in ESSettings().model_dump(mode="json")
+
+
+def test_that_parameter_type_update_strategies_are_kept_in_serialization():
+    settings = ESSettings(
+        parameter_update_strategies={
+            AnalysisParameterType.FIELD: ParameterUpdateStrategy.DISTANCE,
+        }
+    )
+
+    assert settings.model_dump(mode="json")["parameter_update_strategies"] == {
+        "field": "DISTANCE",
+    }
+
+
 def test_unknown_variable_raises_validation_error():
     with pytest.raises(ConfigValidationError, match="Extra inputs are not permitted"):
         _ = AnalysisConfig.from_dict(
@@ -403,6 +421,92 @@ def test_misfit_configuration(config, expected):
         }
     )
     assert analysis_config.observation_settings.auto_scale_observations == expected
+
+
+def test_that_parameter_type_update_strategies_are_loaded_from_analysis_set_var():
+    analysis_config = AnalysisConfig.from_dict(
+        {
+            ConfigKeys.ANALYSIS_SET_VAR: [
+                ["PARAMETERS", "FIELD", "DISTANCE"],
+                ["PARAMETERS", "GEN_KW", "ADAPTIVE"],
+            ],
+        }
+    )
+
+    assert analysis_config.es_settings.parameter_update_strategies == {
+        AnalysisParameterType.FIELD: ParameterUpdateStrategy.DISTANCE,
+        AnalysisParameterType.GEN_KW: ParameterUpdateStrategy.ADAPTIVE,
+    }
+
+
+def test_that_parameter_update_strategies_reject_global_localization():
+    with pytest.raises(
+        ConfigValidationError,
+        match="ANALYSIS_SET_VAR PARAMETERS cannot be combined",
+    ):
+        AnalysisConfig.from_dict(
+            {
+                ConfigKeys.ANALYSIS_SET_VAR: [
+                    ["STD_ENKF", "LOCALIZATION", "True"],
+                    ["PARAMETERS", "GEN_KW", "ADAPTIVE"],
+                ],
+            }
+        )
+
+
+def test_that_distance_localization_keyword_is_rejected():
+    with pytest.raises(
+        ConfigValidationError,
+        match="DISTANCE_LOCALIZATION has been removed",
+    ):
+        AnalysisConfig.from_dict(
+            {
+                ConfigKeys.ANALYSIS_SET_VAR: [
+                    ["STD_ENKF", "DISTANCE_LOCALIZATION", "True"],
+                ],
+            }
+        )
+
+
+def test_that_legacy_distance_localization_is_migrated_in_es_settings():
+    es_settings = ESSettings.model_validate({"distance_localization": True})
+
+    assert es_settings.parameter_update_strategies == {
+        AnalysisParameterType.FIELD: ParameterUpdateStrategy.DISTANCE,
+        AnalysisParameterType.SURFACE: ParameterUpdateStrategy.DISTANCE,
+    }
+
+
+def test_that_unknown_parameter_type_gives_validation_error():
+    with pytest.raises(ConfigValidationError, match="Unknown parameter type"):
+        AnalysisConfig.from_dict(
+            {
+                ConfigKeys.ANALYSIS_SET_VAR: [["PARAMETERS", "FOO", "STANDARD"]],
+            }
+        )
+
+
+def test_that_unknown_parameter_update_strategy_gives_validation_error():
+    with pytest.raises(ConfigValidationError, match="Unknown update strategy"):
+        AnalysisConfig.from_dict(
+            {
+                ConfigKeys.ANALYSIS_SET_VAR: [["PARAMETERS", "FIELD", "FOO"]],
+            }
+        )
+
+
+def test_that_distance_strategy_is_rejected_for_non_spatial_parameter_types():
+    with pytest.raises(
+        ConfigValidationError,
+        match=(
+            "DISTANCE strategy is only supported for FIELD and SURFACE parameter types"
+        ),
+    ):
+        AnalysisConfig.from_dict(
+            {
+                ConfigKeys.ANALYSIS_SET_VAR: [["PARAMETERS", "GEN_KW", "DISTANCE"]],
+            }
+        )
 
 
 @pytest.mark.parametrize(

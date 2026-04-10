@@ -9,7 +9,14 @@ from typing import TYPE_CHECKING, TextIO
 import numpy as np
 import polars as pl
 
-from ert.config import ESSettings, Field, ObservationSettings, SurfaceConfig
+from ert.config import (
+    AnalysisParameterType,
+    ESSettings,
+    Field,
+    ObservationSettings,
+    ParameterUpdateStrategy,
+    SurfaceConfig,
+)
 
 from ._update_commons import (
     ErtAnalysisError,
@@ -42,6 +49,34 @@ if TYPE_CHECKING:
     from ert.storage import Ensemble
 
 logger = logging.getLogger(__name__)
+
+
+def _parameter_type_update_strategy(
+    param_cfg: ParameterConfig,
+    parameter_update_strategies: Mapping[
+        AnalysisParameterType, ParameterUpdateStrategy
+    ],
+) -> ParameterUpdateStrategy:
+    try:
+        parameter_type = AnalysisParameterType(param_cfg.type)
+    except ValueError:
+        return ParameterUpdateStrategy.STANDARD
+
+    return parameter_update_strategies.get(
+        parameter_type, ParameterUpdateStrategy.STANDARD
+    )
+
+
+def _validate_strategy_selection_settings(
+    localization: bool,
+    parameter_update_strategies: Mapping[
+        AnalysisParameterType, ParameterUpdateStrategy
+    ],
+) -> None:
+    if parameter_update_strategies and localization:
+        raise ValueError(
+            "PARAMETERS update strategies cannot be combined with LOCALIZATION"
+        )
 
 
 def _create_combined_ensemble_mask(
@@ -257,8 +292,10 @@ def build_strategy_map(
     parameters: Iterable[str],
     param_configs: Mapping[str, ParameterConfig],
     enkf_truncation: float,
-    distance_localization: bool = False,
     localization: bool = False,
+    parameter_update_strategies: (
+        Mapping[AnalysisParameterType, ParameterUpdateStrategy] | None
+    ) = None,
     correlation_threshold: Callable[[int], float] | None = None,
     rng: np.random.Generator | None = None,
     progress_callback: Callable[[AnalysisEvent], None] | None = None,
@@ -277,13 +314,16 @@ def build_strategy_map(
         Parameter configuration mapping from the experiment.
     enkf_truncation : float
         Singular value truncation threshold (0, 1].
-    distance_localization : bool
-        Whether to use distance-based localization for Field/Surface params.
     localization : bool
         Whether to use adaptive localization.
+    parameter_update_strategies :
+        Mapping[AnalysisParameterType, ParameterUpdateStrategy] | None
+        Explicit per-parameter-type update strategies. This is mutually
+        exclusive with the global ``LOCALIZATION`` setting. Parameter types
+        without an explicit strategy use the standard update.
     correlation_threshold : Callable[[int], float] | None
         Function that takes ensemble size and returns the correlation
-        threshold. Required when ``localization`` is True.
+        threshold. Required when adaptive localization is used.
     rng : np.random.Generator | None
         Random number generator for reproducibility.
     progress_callback : Callable[[AnalysisEvent], None] | None
@@ -300,48 +340,75 @@ def build_strategy_map(
         progress_callback = noop_progress_callback
 
     strategy_map: dict[str, UpdateStrategy] = {}
+    parameter_update_strategies = parameter_update_strategies or {}
 
-    if distance_localization:
-        field_strategy = DistanceLocalizationUpdate(
-            enkf_truncation, rng, Field, progress_callback
-        )
-        surface_strategy = DistanceLocalizationUpdate(
-            enkf_truncation, rng, SurfaceConfig, progress_callback
-        )
-        standard_strategy = StandardESUpdate(
-            enkf_truncation,
-            rng,
-            progress_callback,
-        )
+    _validate_strategy_selection_settings(
+        localization,
+        parameter_update_strategies,
+    )
 
-        for param_name in parameters:
-            param_cfg = param_configs[param_name]
-            if isinstance(param_cfg, Field):
-                strategy_map[param_name] = field_strategy
-            elif isinstance(param_cfg, SurfaceConfig):
-                strategy_map[param_name] = surface_strategy
-            else:
-                strategy_map[param_name] = standard_strategy
+    standard_strategy: StandardESUpdate | None = None
+    adaptive_strategy: AdaptiveLocalizationUpdate | None = None
+    field_strategy: DistanceLocalizationUpdate | None = None
+    surface_strategy: DistanceLocalizationUpdate | None = None
 
-    elif localization:
-        if correlation_threshold is None:
-            raise ValueError(
-                "correlation_threshold is required when localization is enabled"
+    for param_name in parameters:
+        param_cfg = param_configs[param_name]
+        if parameter_update_strategies:
+            strategy = _parameter_type_update_strategy(
+                param_cfg,
+                parameter_update_strategies,
             )
-        adaptive_strategy = AdaptiveLocalizationUpdate(
-            correlation_threshold, enkf_truncation, rng, progress_callback
-        )
-        for param_name in parameters:
-            strategy_map[param_name] = adaptive_strategy
+        elif localization:
+            strategy = ParameterUpdateStrategy.ADAPTIVE
+        else:
+            strategy = ParameterUpdateStrategy.STANDARD
 
-    else:
-        standard_strategy = StandardESUpdate(
-            enkf_truncation,
-            rng,
-            progress_callback,
-        )
-        for param_name in parameters:
-            strategy_map[param_name] = standard_strategy
+        if strategy == ParameterUpdateStrategy.DISTANCE:
+            if isinstance(param_cfg, Field):
+                if field_strategy is None:
+                    field_strategy = DistanceLocalizationUpdate(
+                        enkf_truncation, rng, Field, progress_callback
+                    )
+                strategy_map[param_name] = field_strategy
+                continue
+
+            if isinstance(param_cfg, SurfaceConfig):
+                if surface_strategy is None:
+                    surface_strategy = DistanceLocalizationUpdate(
+                        enkf_truncation, rng, SurfaceConfig, progress_callback
+                    )
+                strategy_map[param_name] = surface_strategy
+                continue
+
+            raise ValueError(
+                "DISTANCE strategy is only supported for Field and Surface "
+                f"parameters, got {param_cfg.type!r}"
+            )
+
+        if strategy == ParameterUpdateStrategy.ADAPTIVE:
+            if correlation_threshold is None:
+                raise ValueError(
+                    "correlation_threshold is required when adaptive "
+                    "localization is enabled"
+                )
+            if adaptive_strategy is None:
+                adaptive_strategy = AdaptiveLocalizationUpdate(
+                    correlation_threshold,
+                    enkf_truncation,
+                    rng,
+                    progress_callback,
+                )
+            strategy_map[param_name] = adaptive_strategy
+            continue
+
+        if standard_strategy is None:
+            standard_strategy = StandardESUpdate(
+                enkf_truncation,
+                rng,
+                progress_callback,
+            )
+        strategy_map[param_name] = standard_strategy
 
     return strategy_map
 
@@ -351,6 +418,7 @@ def smoother_update(
     posterior_storage: Ensemble,
     observations: Iterable[str],
     update_settings: ObservationSettings,
+    *,
     strategy_map: dict[str, UpdateStrategy] | None = None,
     progress_callback: Callable[[AnalysisEvent], None] | None = None,
     global_scaling: float = 1.0,

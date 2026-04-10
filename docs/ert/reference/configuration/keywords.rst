@@ -1579,6 +1579,19 @@ ANALYSIS_SET_VAR keyword for the `STD_ENKF` module.
 
     ANALYSIS_SET_VAR  STD_ENKF  ENKF_TRUNCATION  0.98
 
+The ``PARAMETERS`` module can be used to define a default update strategy per
+parameter type:
+
+::
+
+        ANALYSIS_SET_VAR PARAMETERS FIELD DISTANCE
+        ANALYSIS_SET_VAR PARAMETERS GEN_KW ADAPTIVE
+
+These rules are an alternative to the global ``LOCALIZATION`` setting.
+Use ``PARAMETERS`` when you want per-parameter defaults such as
+``DISTANCE`` for ``FIELD`` or ``SURFACE``. Do not combine
+``LOCALIZATION`` with ``PARAMETERS`` rules in the same configuration.
+
 
 .. _inversion_algorithm:
 
@@ -1630,6 +1643,57 @@ This is default ``0.30``.
 ::
 
         ANALYSIS_SET_VAR STD_ENKF LOCALIZATION_CORRELATION_THRESHOLD 0.30
+
+.. _auto_scale_observations_keyword:
+
+PARAMETERS
+^^^^^^^^^^
+
+Use the ``PARAMETERS`` module to set a default update strategy for a parameter
+type. Supported parameter types are ``FIELD``, ``SURFACE``, ``GEN_KW`` and
+``EVEREST_PARAMETERS``.
+
+The following strategy values are supported:
+
+``STANDARD``
+        Use the standard ensemble smoother update with no localization.
+
+``ADAPTIVE``
+        Use adaptive localization. This uses the same
+        :ref:`LOCALIZATION_CORRELATION_THRESHOLD <local_corr_threshold>` setting as
+        legacy global adaptive localization.
+
+``DISTANCE``
+        Use distance-based localization. This is only valid for ``FIELD`` and
+        ``SURFACE`` parameters.
+
+``PARAMETERS`` is an alternative to the global ``LOCALIZATION`` setting.
+Do not combine them in the same configuration file.
+
+The legacy ``DISTANCE_LOCALIZATION`` setting has been removed. Use
+``ANALYSIS_SET_VAR PARAMETERS FIELD DISTANCE`` and/or
+``ANALYSIS_SET_VAR PARAMETERS SURFACE DISTANCE`` instead.
+
+Any parameter type not named by a ``PARAMETERS`` rule uses the standard update
+strategy.
+
+Examples:
+
+::
+
+        ANALYSIS_SET_VAR PARAMETERS FIELD DISTANCE
+
+Only ``FIELD`` parameters use distance-based localization. The other
+parameter types use the standard update strategy.
+
+::
+
+        ANALYSIS_SET_VAR PARAMETERS FIELD DISTANCE
+        ANALYSIS_SET_VAR PARAMETERS GEN_KW ADAPTIVE
+
+``FIELD`` parameters use distance-based localization, ``GEN_KW`` parameters
+use adaptive localization, and ``SURFACE`` plus ``EVEREST_PARAMETERS`` use the
+standard update strategy.
 
 .. _auto_scale_observations_keyword:
 

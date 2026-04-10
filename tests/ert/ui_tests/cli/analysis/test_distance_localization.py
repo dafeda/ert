@@ -2,7 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from ert.config import ErtConfig
+from ert.config import (
+    AnalysisParameterType,
+    ErtConfig,
+    ParameterUpdateStrategy,
+)
 from ert.mode_definitions import ENSEMBLE_SMOOTHER_MODE
 from ert.storage import open_storage
 from tests.ert.ui_tests.cli.run_cli import run_cli
@@ -38,47 +42,9 @@ def assert_variance_in_field(
 
 
 @pytest.mark.timeout(600)
-@pytest.mark.usefixtures("copy_snake_oil_field")
-@pytest.mark.slow
-def test_that_distance_localization_works_with_a_single_observation():
-    with Path("snake_oil_field.ert").open("r+", encoding="utf-8") as f:
-        lines = f.readlines()
-
-    config_content = [
-        line for line in lines if not line.lstrip().startswith("OBS_CONFIG")
-    ]
-    config_content.extend(
-        [
-            "ANALYSIS_SET_VAR STD_ENKF DISTANCE_LOCALIZATION True\n",
-            "OBS_CONFIG observations/observations_loc.txt\n",
-        ]
-    )
-
-    with Path("snake_oil_field_dl.ert").open("w", encoding="utf-8") as f:
-        f.writelines(config_content)
-
-    run_cli(
-        ENSEMBLE_SMOOTHER_MODE,
-        "--disable-monitoring",
-        "snake_oil_field_dl.ert",
-        "--experiment-name",
-        "dl",
-    )
-
-    ert_config = ErtConfig.from_file("snake_oil_field_dl.ert")
-    assert ert_config.analysis_config.es_settings.distance_localization is True
-    storage = open_storage(ert_config.ens_path)
-    experiment = storage.get_experiment_by_name("dl")
-    ens_prior = experiment.get_ensemble_by_name("iter-0")
-    ens_posterior = experiment.get_ensemble_by_name("iter-1")
-
-    assert_variance_in_field(ens_prior, ens_posterior, "PORO", (5, 5), (9, 9))
-
-
-@pytest.mark.timeout(600)
 @pytest.mark.usefixtures("copy_heat_equation")
 @pytest.mark.slow
-def test_that_distance_localization_runs_on_heat_equation():
+def test_that_parameter_type_distance_strategy_runs_on_heat_equation():
     with Path("config.ert").open(encoding="utf-8") as fh:
         lines = fh.readlines()
 
@@ -87,25 +53,29 @@ def test_that_distance_localization_runs_on_heat_equation():
     ]
     config_content.extend(
         [
-            "ANALYSIS_SET_VAR STD_ENKF DISTANCE_LOCALIZATION True\n",
-            "ENSPATH heat_storage_dl\n",
+            "ANALYSIS_SET_VAR PARAMETERS FIELD DISTANCE\n",
+            "ENSPATH heat_storage_type_dl\n",
         ]
     )
-    with Path("heat_dl.ert").open("w", encoding="utf-8") as fh:
+    with Path("heat_type_dl.ert").open("w", encoding="utf-8") as fh:
         fh.writelines(config_content)
 
     run_cli(
         ENSEMBLE_SMOOTHER_MODE,
         "--disable-monitoring",
-        "heat_dl.ert",
+        "heat_type_dl.ert",
         "--experiment-name",
-        "heat_dl",
+        "heat_type_dl",
     )
 
-    config = ErtConfig.from_file("heat_dl.ert")
-    assert config.analysis_config.es_settings.distance_localization is True
+    config = ErtConfig.from_file("heat_type_dl.ert")
+    assert config.analysis_config.es_settings.localization is False
+    assert config.analysis_config.es_settings.parameter_update_strategies == {
+        AnalysisParameterType.FIELD: ParameterUpdateStrategy.DISTANCE,
+    }
+
     with open_storage(config.ens_path) as storage:
-        experiment = storage.get_experiment_by_name("heat_dl")
+        experiment = storage.get_experiment_by_name("heat_type_dl")
         prior = experiment.get_ensemble_by_name("iter-0")
         posterior = experiment.get_ensemble_by_name("iter-1")
         assert_variance_in_field(prior, posterior, "COND", (2, 2), (9, 9))

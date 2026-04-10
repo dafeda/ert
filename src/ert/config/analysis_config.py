@@ -11,7 +11,12 @@ from typing import Any, Final
 from pydantic import Field, PositiveFloat, ValidationError
 from pydantic.dataclasses import dataclass
 
-from .analysis_module import ESSettings
+from .analysis_module import (
+    DISTANCE_LOCALIZATION_PARAMETER_TYPES,
+    AnalysisParameterType,
+    ESSettings,
+    ParameterUpdateStrategy,
+)
 from .design_matrix import DesignMatrix
 from .parsing import (
     ConfigDict,
@@ -22,7 +27,27 @@ from .parsing import (
 
 logger = logging.getLogger(__name__)
 
+
+def _is_enabled_analysis_setting(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+
+    lowered_value = str(value).strip().lower()
+    if lowered_value == "true":
+        return True
+    if lowered_value == "false":
+        return False
+
+    return None
+
+
 ObservationGroups = list[str]
+VALID_PARAMETER_TYPE_NAMES: Final = ", ".join(
+    parameter_type.name for parameter_type in AnalysisParameterType
+)
+VALID_PARAMETER_UPDATE_STRATEGY_NAMES: Final = ", ".join(
+    strategy.name for strategy in ParameterUpdateStrategy
+)
 
 
 @dataclass
@@ -91,6 +116,9 @@ class AnalysisConfig:
         design_matrix_config_lists = config_dict.get(ConfigKeys.DESIGN_MATRIX, [])
 
         options: dict[str, dict[str, Any]] = {"STD_ENKF": {}}
+        parameter_update_strategies: dict[
+            AnalysisParameterType, ParameterUpdateStrategy
+        ] = {}
 
         auto_scale_observations: list[str] = []
         analysis_set_var = config_dict.get(ConfigKeys.ANALYSIS_SET_VAR, [])
@@ -124,6 +152,46 @@ class AnalysisConfig:
                             f"OBSERVATIONS {var_name}\nValid options: AUTO_SCALE"
                         )
                     )
+                continue
+            if module_name == "PARAMETERS":
+                try:
+                    parameter_type = AnalysisParameterType[var_name.upper()]
+                except KeyError:
+                    all_errors.append(
+                        ConfigValidationError(
+                            f"Unknown parameter type: {var_name} for: "
+                            f"ANALYSIS_SET_VAR PARAMETERS {var_name}\n"
+                            f"Valid options: {VALID_PARAMETER_TYPE_NAMES}"
+                        )
+                    )
+                    continue
+
+                try:
+                    strategy = ParameterUpdateStrategy[str(value).upper()]
+                except KeyError:
+                    all_errors.append(
+                        ConfigValidationError(
+                            f"Unknown update strategy: {value} for: "
+                            f"ANALYSIS_SET_VAR PARAMETERS {var_name} {value}\n"
+                            "Valid options: "
+                            f"{VALID_PARAMETER_UPDATE_STRATEGY_NAMES}"
+                        )
+                    )
+                    continue
+
+                if (
+                    strategy == ParameterUpdateStrategy.DISTANCE
+                    and parameter_type not in DISTANCE_LOCALIZATION_PARAMETER_TYPES
+                ):
+                    all_errors.append(
+                        ConfigValidationError(
+                            "DISTANCE strategy is only supported for FIELD and "
+                            "SURFACE parameter types"
+                        )
+                    )
+                    continue
+
+                parameter_update_strategies[parameter_type] = strategy
                 continue
 
             module_options = options.get(module_name)
@@ -166,8 +234,31 @@ class AnalysisConfig:
                         )
                     )
                 continue
+            if var_name == "DISTANCE_LOCALIZATION":
+                all_errors.append(
+                    ConfigValidationError(
+                        "DISTANCE_LOCALIZATION has been removed. Use "
+                        "ANALYSIS_SET_VAR PARAMETERS FIELD DISTANCE and/or "
+                        "ANALYSIS_SET_VAR PARAMETERS SURFACE DISTANCE instead."
+                    )
+                )
+                continue
             key = var_name.lower()
             module_options[key] = value
+
+        localization_enabled = (
+            _is_enabled_analysis_setting(options["STD_ENKF"].get("localization"))
+            is True
+        )
+
+        if parameter_update_strategies and localization_enabled:
+            all_errors.append(
+                ConfigValidationError(
+                    "ANALYSIS_SET_VAR PARAMETERS cannot be combined with "
+                    "LOCALIZATION. Use either global adaptive localization or "
+                    "per-parameter update strategies."
+                )
+            )
 
         if errors:
             all_errors.append(
@@ -181,6 +272,10 @@ class AnalysisConfig:
             )
 
         try:
+            if parameter_update_strategies:
+                options["STD_ENKF"]["parameter_update_strategies"] = (
+                    parameter_update_strategies
+                )
             es_settings = ESSettings(**options["STD_ENKF"])
             outlier_settings: dict[str, Any] = {
                 "alpha": config_dict.get(ConfigKeys.ENKF_ALPHA, 3.0),

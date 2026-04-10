@@ -5,7 +5,13 @@ from .analysis_config import (
     ObservationSettings,
     OutlierSettings,
 )
-from .analysis_module import AnalysisModule, ESSettings, InversionTypeES
+from .analysis_module import (
+    AnalysisModule,
+    AnalysisParameterType,
+    ESSettings,
+    InversionTypeES,
+    ParameterUpdateStrategy,
+)
 from .breakthrough_config import BreakthroughConfig
 from .capture_validation import capture_validation
 from .derived_response_config import DerivedResponseConfig
@@ -81,6 +87,7 @@ from .workflow_job import (
 __all__ = [
     "AnalysisConfig",
     "AnalysisModule",
+    "AnalysisParameterType",
     "BaseErtScriptWorkflow",
     "BreakthroughConfig",
     "ConfigValidationError",
@@ -127,6 +134,7 @@ __all__ = [
     "OutlierSettings",
     "ParameterCardinality",
     "ParameterConfig",
+    "ParameterUpdateStrategy",
     "PostExperimentFixtures",
     "PostSimulationFixtures",
     "PostUpdateFixtures",

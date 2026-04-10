@@ -483,16 +483,18 @@ def test_field_param_update_using_heat_equation_zero_var_params_and_adaptive_loc
                     parameters=config.ensemble_config.parameters,
                     param_configs=new_prior.experiment.parameter_configuration,
                     enkf_truncation=es_settings.enkf_truncation,
-                    distance_localization=es_settings.distance_localization,
                     localization=es_settings.localization,
+                    parameter_update_strategies=(
+                        es_settings.parameter_update_strategies
+                    ),
                     correlation_threshold=es_settings.correlation_threshold,
                 )
                 smoother_update(
                     new_prior,
                     new_posterior,
-                    experiment.observation_keys,
+                    new_prior.experiment.observation_keys,
                     ObservationSettings(),
-                    strategy_map,
+                    strategy_map=strategy_map,
                 )
 
                 # Note that this used to fail since run time and user warnings were

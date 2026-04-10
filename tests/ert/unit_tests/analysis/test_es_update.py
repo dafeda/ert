@@ -19,13 +19,22 @@ from ert.analysis._update_commons import (
     _OutlierColumns,
     _preprocess_observations_and_responses,
 )
+from ert.analysis._update_strategies import (
+    AdaptiveLocalizationUpdate,
+    DistanceLocalizationUpdate,
+    StandardESUpdate,
+)
 from ert.analysis.event import AnalysisCompleteEvent
 from ert.config import (
+    AnalysisParameterType,
     ESSettings,
+    Field,
     GenDataConfig,
     GenKwConfig,
     ObservationSettings,
     OutlierSettings,
+    ParameterUpdateStrategy,
+    SurfaceConfig,
 )
 from ert.storage import Ensemble, open_storage
 
@@ -57,6 +66,99 @@ def obs() -> list[dict[str, Any]]:
             (2, 1.0, 10.0),
         ]
     ]
+
+
+def _parameter_configs_for_strategy_tests():
+    return {
+        "FIELD_PARAM": Field.model_construct(
+            type="field",
+            name="FIELD_PARAM",
+            forward_init=False,
+            update=True,
+        ),
+        "SURFACE_PARAM": SurfaceConfig.model_construct(
+            type="surface",
+            name="SURFACE_PARAM",
+            forward_init=False,
+            update=True,
+        ),
+        "GEN_KW_PARAM": GenKwConfig(
+            name="GEN_KW_PARAM",
+            group="PARAMETER",
+            distribution={"name": "uniform", "min": 0, "max": 1},
+        ),
+    }
+
+
+def test_that_build_strategy_map_rejects_mixed_localization_modes():
+    parameter_configs = _parameter_configs_for_strategy_tests()
+
+    with pytest.raises(
+        ValueError,
+        match=("PARAMETERS update strategies cannot be combined with LOCALIZATION"),
+    ):
+        build_strategy_map(
+            parameters=parameter_configs,
+            param_configs=parameter_configs,
+            enkf_truncation=1.0,
+            localization=True,
+            parameter_update_strategies={
+                AnalysisParameterType.GEN_KW: ParameterUpdateStrategy.ADAPTIVE,
+            },
+            correlation_threshold=lambda _: 0.5,
+        )
+
+
+def test_that_build_strategy_map_applies_global_localization_to_all_params():
+    parameter_configs = _parameter_configs_for_strategy_tests()
+
+    strategy_map = build_strategy_map(
+        parameters=parameter_configs,
+        param_configs=parameter_configs,
+        enkf_truncation=1.0,
+        localization=True,
+        correlation_threshold=lambda _: 0.5,
+    )
+
+    assert isinstance(strategy_map["FIELD_PARAM"], AdaptiveLocalizationUpdate)
+    assert isinstance(strategy_map["SURFACE_PARAM"], AdaptiveLocalizationUpdate)
+    assert isinstance(strategy_map["GEN_KW_PARAM"], AdaptiveLocalizationUpdate)
+
+
+def test_that_unspecified_parameter_type_strategies_default_to_standard():
+    parameter_configs = _parameter_configs_for_strategy_tests()
+
+    strategy_map = build_strategy_map(
+        parameters=parameter_configs,
+        param_configs=parameter_configs,
+        enkf_truncation=1.0,
+        parameter_update_strategies={
+            AnalysisParameterType.FIELD: ParameterUpdateStrategy.DISTANCE,
+        },
+    )
+
+    assert isinstance(strategy_map["FIELD_PARAM"], DistanceLocalizationUpdate)
+    assert isinstance(strategy_map["SURFACE_PARAM"], StandardESUpdate)
+    assert isinstance(strategy_map["GEN_KW_PARAM"], StandardESUpdate)
+
+
+def test_that_adaptive_override_requires_correlation_threshold():
+    parameter_configs = _parameter_configs_for_strategy_tests()
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "correlation_threshold is required when adaptive localization is enabled"
+        ),
+    ):
+        build_strategy_map(
+            parameters=parameter_configs,
+            param_configs=parameter_configs,
+            enkf_truncation=1.0,
+            parameter_update_strategies={
+                AnalysisParameterType.GEN_KW: ParameterUpdateStrategy.ADAPTIVE,
+            },
+        )
 
 
 @pytest.mark.slow
@@ -96,9 +198,9 @@ def test_update_report(
     smoother_update(
         prior_ens,
         posterior_ens,
-        experiment.observation_keys,
+        prior_ens.experiment.observation_keys,
         ObservationSettings(auto_scale_observations=misfit_preprocess),
-        strategy_map,
+        strategy_map=strategy_map,
         progress_callback=events.append,
     )
 
@@ -171,9 +273,9 @@ def test_update_report_with_different_observation_status_from_smoother_update(
     ss = smoother_update(
         prior_ens,
         posterior_ens,
-        experiment.observation_keys,
+        prior_ens.experiment.observation_keys,
         update_settings,
-        strategy_map,
+        strategy_map=strategy_map,
         progress_callback=events.append,
     )
 
@@ -302,7 +404,7 @@ def test_update_handles_precision_loss_in_std_dev(tmp_path):
         ss = smoother_update(
             prior,
             posterior,
-            experiment.observation_keys,
+            prior.experiment.observation_keys,
             ObservationSettings(auto_scale_observations=[["OBS*"]]),
             progress_callback=events.append,
         )
@@ -362,9 +464,9 @@ def test_update_snapshot(
     smoother_update(
         prior_ens,
         posterior_ens,
-        experiment.observation_keys,
+        prior_ens.experiment.observation_keys,
         ObservationSettings(),
-        strategy_map,
+        strategy_map=strategy_map,
     )
 
     sim_gen_kw = list(
@@ -493,7 +595,7 @@ def test_smoother_snapshot_alpha(
         result_snapshot = smoother_update(
             prior_storage,
             posterior_storage,
-            observations=["OBSERVATION"],
+            prior_storage.experiment.observation_keys,
             update_settings=ObservationSettings(
                 outlier_settings=OutlierSettings(alpha=alpha)
             ),
@@ -525,11 +627,12 @@ def test_update_only_using_subset_observations(
         prior_ensemble=prior_ens,
     )
     events = []
+    prior_ens.experiment.__dict__["observation_keys"] = ["WPR_DIFF_1"]
 
     smoother_update(
         prior_ens,
         posterior_ens,
-        ["WPR_DIFF_1"],
+        prior_ens.experiment.observation_keys,
         ObservationSettings(),
         progress_callback=events.append,
     )
@@ -976,7 +1079,7 @@ def test_gen_data_obs_data_mismatch(storage, uniform_parameter):
         smoother_update(
             prior,
             posterior_ens,
-            ["OBSERVATION"],
+            prior.experiment.observation_keys,
             ObservationSettings(),
         )
 
@@ -1035,7 +1138,7 @@ def test_gen_data_missing(storage, uniform_parameter, obs):
     update_snapshot = smoother_update(
         prior,
         posterior_ens,
-        ["OBSERVATION"],
+        prior.experiment.observation_keys,
         ObservationSettings(),
         progress_callback=events.append,
     )
@@ -1123,7 +1226,7 @@ def test_update_subset_parameters(storage, uniform_parameter, obs):
     smoother_update(
         prior,
         posterior_ens,
-        ["OBSERVATION"],
+        prior.experiment.observation_keys,
         ObservationSettings(),
         active_realizations=active_realizations,
     )
