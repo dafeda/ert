@@ -45,11 +45,12 @@ def sample_prior(
             continue
 
         if isinstance(config_node, GenKwConfig):
-            dataset: pl.DataFrame | None = None
-            if (
-                config_node.input_source == DataSource.DESIGN_MATRIX
-                and design_matrix_df is not None
-            ):
+            if config_node.input_source == DataSource.DESIGN_MATRIX:
+                if design_matrix_df is None:
+                    raise ValueError(
+                        f"Parameter '{config_node.name}' uses a design matrix, but no "
+                        "design matrix was provided to sample_prior."
+                    )
                 cols = {"realization", config_node.name}
                 missing = cols - set(design_matrix_df.columns)
                 if missing:
@@ -68,10 +69,15 @@ def sample_prior(
                     random_seed=random_seed,
                     num_realizations=num_realizations,
                 )
-            if not (dataset is None or dataset.is_empty()):
+            else:
+                raise NotImplementedError(
+                    f"Unhandled input source for"
+                    f" '{config_node.name}': {config_node.input_source}"
+                )
+            if not dataset.is_empty():
                 if complete_dataset is None:
                     complete_dataset = dataset
-                elif dataset is not None:
+                else:
                     complete_dataset = complete_dataset.join(dataset, on="realization")
 
         else:
