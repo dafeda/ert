@@ -1898,6 +1898,26 @@ by commas:
 This will find correlations across observations matching either ``OBS_1*`` or ``OBS_2*`` and
 scale them together as one group.
 
+This experimental branch replaces PCA-based Auto Scaling with participation-ratio
+Auto Scaling whenever the existing keyword is enabled. The maximum cluster count
+is the ceiling of the global Pearson response-correlation participation rank.
+Clustering uses direct absolute Spearman distance and average linkage. Within each
+cluster, the observation-error standard-deviation multiplier is the square root of
+the cluster size divided by its unrounded Pearson participation rank.
+
+Clusters and factors are recomputed from the current active responses before
+every update. Factors are uncapped and multiply the existing ES-MDA error scaling.
+Prescribed observation errors, observation groups, outlier filtering, and the
+ES-MDA schedule are unchanged. Input groups with at most two observations retain
+unit factors. Update tables report fractional effective ranks, and logs include
+the global rank, requested and actual cluster counts, and factor summaries.
+
+For a reservoir pilot, keep observation groups and prescribed errors identical
+to the production baseline. Inspect the first update before completing the run,
+and compare forecast behavior and residuals using the original errors rather
+than judging the result only by the inflated-error misfit. Use a separate
+environment for this branch and retain the cluster's required site plugins.
+
 .. _enkf_truncation:
 
 ENKF_TRUNCATION

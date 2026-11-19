@@ -3,187 +3,183 @@ import logging
 import numpy as np
 import numpy.typing as npt
 from scipy.cluster.hierarchy import fcluster, linkage
+from scipy.spatial.distance import squareform
 from scipy.stats import spearmanr
 
 logger = logging.getLogger(__name__)
 
 
-def get_scaling_factor(nr_observations: int, nr_components: int) -> float:
+def get_scaling_factor(nr_observations: int, effective_rank: float) -> float:
     """Calculate the observation-error scaling factor.
 
-    Args:
-        nr_observations is the number of observations
-        nr_components is the number of principal components retained from PCA
+    Parameters
+    ----------
+    nr_observations
+        Number of observations in the cluster.
+    effective_rank
+        Participation-ratio effective rank. A zero value is treated as one.
+
+    Returns
+    -------
+    float
+        Standard-deviation multiplier for the observation errors.
     """
-    if nr_components == 0:
-        nr_components = 1
+    if effective_rank == 0:
+        effective_rank = 1.0
         logger.warning(
-            "Number of PCA components is 0. "
+            "Participation rank is 0. "
             "Setting to 1 to avoid division by zero "
             "when calculating scaling factor"
         )
 
-    return np.sqrt(nr_observations / float(nr_components))
+    return float(np.sqrt(nr_observations / effective_rank))
 
 
-def get_nr_primary_components(
-    responses: npt.NDArray[np.float64], threshold: float
-) -> int:
+def get_participation_rank(responses: npt.NDArray[np.float64]) -> float:
+    """Return the participation rank of the Pearson response correlation.
+
+    The smaller Gram matrix has the same nonzero spectrum as the response
+    correlation matrix up to a common factor. Its squared trace divided by
+    its squared Frobenius norm therefore gives the same participation rank
+    without an eigendecomposition or a large observation-space matrix.
+
+    Parameters
+    ----------
+    responses
+        Response samples with shape (n_realizations, n_observations).
+
+    Returns
+    -------
+    float
+        Effective rank bounded by one and the centered ensemble rank limit.
+
+    Raises
+    ------
+    ValueError
+        If the matrix is empty, has fewer than two realizations, or contains
+        nonfinite responses or an observation without ensemble spread.
     """
-    Calculate the number of principal components required
-    to explain a given amount of variance in the responses.
-
-    Args:
-    responses: A 2D array of data with shape
-        (n_realizations, n_observations).
-    threshold: The cumulative variance threshold to meet or exceed.
-        For example, a value of 0.95 will find the number of
-        components needed to explain at least 95% of the total variance.
-
-    Returns:
-        The minimum number of principal components required to meet or exceed
-        the specified variance threshold.
-    """
-    data_matrix = responses - responses.mean(axis=0)
-    _, singulars, _ = np.linalg.svd(data_matrix.astype(float), full_matrices=False)
-    # Calculate cumulative variance ratio:
-    # Squared singular values are proportional to variance explained by each principal
-    # component. We compute the cumulative sum of these, then divide by their total
-    # sum to get the cumulative proportion of variance explained by each successive
-    # component.
-    variance_ratio = np.cumsum(singulars**2) / np.sum(singulars**2)
-
-    num_components = np.searchsorted(variance_ratio, threshold, side="left") + 1
-
-    return int(num_components)
+    responses = np.asarray(responses, dtype=np.float64)
+    if responses.ndim != 2 or responses.shape[0] < 2 or responses.shape[1] == 0:
+        raise ValueError(
+            "Responses must contain at least two realizations and one observation"
+        )
+    if not np.isfinite(responses).all():
+        raise ValueError("Responses must be finite and have positive ensemble spread")
+    centered = responses - responses.mean(axis=0)
+    std = centered.std(axis=0)
+    if np.any(~np.isfinite(std)) or np.any(std <= 0):
+        raise ValueError("Responses must be finite and have positive ensemble spread")
+    standardized = centered / std
+    nr_realizations, nr_observations = responses.shape
+    gram = (
+        standardized @ standardized.T
+        if nr_realizations < nr_observations
+        else standardized.T @ standardized
+    )
+    rank = np.trace(gram) ** 2 / np.sum(gram**2)
+    return float(np.clip(rank, 1.0, min(nr_observations, nr_realizations - 1)))
 
 
 def cluster_responses(
     responses: npt.NDArray[np.float64],
     nr_clusters: int,
 ) -> npt.NDArray[np.int_]:
-    """
-    Cluster responses using hierarchical clustering on absolute Spearman correlation.
-    Observations that vary similarly across realizations, regardless of whether
-    the relationship is positive or negative, will tend to be clustered together.
+    """Cluster responses using direct absolute Spearman distance.
+
+    Parameters
+    ----------
+    responses
+        Response samples with shape (n_realizations, n_observations).
+    nr_clusters
+        Maximum number of clusters requested from average-linkage clustering.
+
+    Returns
+    -------
+    ndarray
+        One-based cluster labels. Tied distances can produce fewer clusters
+        than requested.
     """
     correlation = spearmanr(responses).statistic
-    if isinstance(correlation, np.float64):
+    if np.ndim(correlation) == 0:
         correlation = np.array([[1, correlation], [correlation, 1]])
-    # Take absolute value to cluster based on correlation strength rather
-    # than direction.
-    # This ensures that strong negative correlations (-0.9) are
-    # treated as similar to
-    # strong positive correlations (+0.9), since both represent
-    # strong relationships.
-    correlation = np.abs(correlation)
-    linkage_matrix = linkage(correlation, "average", "euclidean")
+    distance = 1.0 - np.abs(correlation)
+    distance = (distance + distance.T) / 2.0
+    np.fill_diagonal(distance, 0.0)
+    np.clip(distance, 0.0, None, out=distance)
+    linkage_matrix = linkage(squareform(distance), method="average")
     return fcluster(linkage_matrix, nr_clusters, criterion="maxclust")
 
 
 def main(
     responses: npt.NDArray[np.float64],
     obs_errors: npt.NDArray[np.float64],
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.int_], npt.NDArray[np.int_]]:
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.int_], npt.NDArray[np.float64]]:
+    """Calculate participation-ratio Auto Scaling for one observation group.
+
+    The ceiling of the global Pearson participation rank bounds the cluster
+    count. Clustering uses direct absolute Spearman distance and average
+    linkage. Each cluster's errors receive the square root of its size divided
+    by its unrounded Pearson participation rank. Factors are uncapped and
+    recomputed from the current responses on every call.
+
+    Parameters
+    ----------
+    responses
+        Current response ensemble with shape (n_observations, n_realizations).
+        Active observations must have finite responses and positive spread.
+    obs_errors
+        Observation-error standard deviations. Only their count is used.
+        The caller applies the returned multipliers to the errors.
+
+    Returns
+    -------
+    scale_factors
+        Standard-deviation multiplier for each observation.
+    clusters
+        One-based cluster label for each observation.
+    effective_ranks
+        Unrounded participation rank of each observation's cluster. Input
+        groups with at most two observations retain unit factors and ranks.
+
+    Raises
+    ------
+    ValueError
+        If the response shape does not match the errors, there are fewer than
+        two realizations, or an active correlation is undefined.
     """
-    Perform 'Auto Scaling' to mitigate issues with correlated observations in ensemble
-    smoothers.
-
-    This method was developed internally to address challenges with correlated
-    observations in ensemble smoothers, which can lead to overconfident updates.
-    Originally named 'Misfit Preprocessor', it was renamed to 'Auto Scaling' as
-    it doesn't calculate misfits.
-
-    The procedure involves several steps:
-
-    1. Response Scaling:
-        Each response is centered by subtracting its ensemble mean and then
-        divided by its ensemble standard deviation. This removes offsets and
-        puts all responses on a common unit-variance scale before the PCA and
-        clustering steps.
-    2. PCA for Dimensionality Estimation:
-        PCA is performed on the centered and scaled
-        responses to estimate the intrinsic dimensionality of the data.
-        The number of principal components that cumulatively explain a predefined
-        percentage of variance (e.g., 95%) is determined.
-    3. Hierarchical Clustering:
-        Based on the dimensionality estimated by PCA,
-        a hierarchical clustering is performed using the Spearman correlation
-        matrix of the scaled responses.
-        Clustering is done to identify groups of observations with similar variation
-        patterns. Using the number of principal components as the number of clusters
-        is not a widely common technique in clustering analysis.
-        Potential rationale (the creator of method did not document the reasoning
-        behind the method):
-        The number of principal components to explain 95% of the variance can be seen as
-        an estimate of the intrinsic dimensionality of the data.
-        Using this as the number of clusters assumes that each major direction of
-        variance could correspond to a distinct cluster.
-        This method allows the number of clusters to be data-driven rather than
-        pre-determined, which can be advantageous in some scenarios.
-        One potential issue is that data can have a certain number of significant
-        dimensions but a different number of natural clusters.
-    4. Cluster-Based PCA and Scaling:
-        For each cluster, PCA is performed to determine the number of principal
-        components that explain a specified percentage of variance within that cluster.
-        A scaling factor for the observation errors is then calculated as the square
-        root of the ratio of the number of observations in the cluster to the number
-        of principal components. The specific formula used is not a standard approach,
-        but may nevertheless be reasonable. If N responses are perfectly correlated,
-        the number of principal components will be 1, resulting in a scaling factor
-        of sqrt(N). According to statistical theory, this is the correct scaling factor
-        to use when N responses are perfectly correlated, as it ensures the accumulated
-        weight (precision) of the N copies equals that of a single independent
-        observation. The term sqrt(N/N_eff), where N_eff is the number of principal
-        components (effective independent samples), can be interpreted as an
-        adjustment for the effective sample size.
-
-    Parameters:
-    -----------
-    responses : npt.NDArray[np.float_]
-        2D array of response data. Shape: (n_observations, n_realizations)
-    obs_errors : npt.NDArray[np.float_]
-        1D array of observation errors. Only the length is used here to size the
-        outputs and to short-circuit when there are two or fewer observations;
-        the returned scale factors are applied to the observation errors by the
-        caller.
-
-    Returns:
-    --------
-    Tuple[npt.NDArray[np.float_], npt.NDArray[np.int_], npt.NDArray[np.int_]]
-        - scale_factors: Array of scaling factors for observation errors
-        - clusters: Array of cluster assignments for each observation
-        - nr_components: Array of the number of principal components for each
-          observation
-    """
+    responses = np.asarray(responses, dtype=np.float64)
+    if responses.ndim != 2 or responses.shape[0] != len(obs_errors):
+        raise ValueError("Response rows must match the number of observation errors")
+    if responses.shape[1] < 2:
+        raise ValueError("Responses must contain at least two realizations")
     scale_factors = np.ones(len(obs_errors))
-    nr_components = np.ones(len(obs_errors), dtype=int)
-    scaled_responses = (
-        responses - responses.mean(axis=1).reshape(-1, 1)
-    ) / responses.std(axis=1).reshape(-1, 1)
+    effective_ranks = np.ones(len(obs_errors))
 
     if len(obs_errors) <= 2:
         logger.info("Skipping auto scaling for two or fewer observations")
-        return scale_factors, np.ones(len(obs_errors), dtype=int), nr_components
+        return scale_factors, np.ones(len(obs_errors), dtype=int), effective_ranks
 
-    prim_components = get_nr_primary_components(scaled_responses.T, threshold=0.95)
-    clusters = cluster_responses(scaled_responses.T, nr_clusters=prim_components)
+    global_rank = get_participation_rank(responses.T)
+    requested_clusters = int(np.ceil(global_rank))
+    clusters = cluster_responses(responses.T, nr_clusters=requested_clusters)
 
     for cluster in np.unique(clusters):
         index = np.where(clusters == cluster)[0]
-        if len(index) == 1:
-            # A singleton cluster contributes one effective component.
-            components = 1
-        else:
-            components = get_nr_primary_components(
-                scaled_responses[index].T, threshold=0.95
-            )
-            components = 1 if components == 0 else components
-        scale_factor = get_scaling_factor(len(index), components)
-        nr_components[index] *= components
-        scale_factors[index] *= scale_factor
+        rank = 1.0 if len(index) == 1 else get_participation_rank(responses[index].T)
+        effective_ranks[index] = rank
+        scale_factors[index] = get_scaling_factor(len(index), rank)
     logger.info(
-        f"Calculated scaling factors for {len(scale_factors)} observations across "
-        f"{len(np.unique(clusters))} clusters"
+        "Participation-ratio auto scaling for %d observations with global rank %.6f "
+        "requested %d clusters and produced %d clusters. "
+        "Standard-deviation multipliers range from %.6f to %.6f "
+        "with mean variance multiplier %.6f",
+        len(scale_factors),
+        global_rank,
+        requested_clusters,
+        len(np.unique(clusters)),
+        scale_factors.min(),
+        scale_factors.max(),
+        np.mean(scale_factors**2),
     )
-    return scale_factors, clusters, nr_components
+    return scale_factors, clusters, effective_ranks

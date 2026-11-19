@@ -28,7 +28,11 @@ from ert.analysis._update_commons import (
 )
 from ert.analysis._update_strategies._adaptive import AdaptiveLocalizationUpdate
 from ert.analysis._update_strategies._protocol import ObservationContext
-from ert.analysis.event import AnalysisCompleteEvent, AnalysisScalingEvent
+from ert.analysis.event import (
+    AnalysisCompleteEvent,
+    AnalysisDataEvent,
+    AnalysisScalingEvent,
+)
 from ert.config import (
     ESSettings,
     Field,
@@ -793,7 +797,8 @@ def _mock_preprocess_observations_and_responses(
         )
 
 
-def test_that_autoscaling_applies_to_scaled_errors(storage):
+@pytest.mark.parametrize("global_std_scaling", [1.0, 4.0])
+def test_that_autoscaling_applies_to_scaled_errors(storage, global_std_scaling):
     with patch("ert.analysis.misfit_preprocessor.main") as misfit_main:
         misfit_main.return_value = (
             np.array([2, 3]),
@@ -815,7 +820,6 @@ def test_that_autoscaling_applies_to_scaled_errors(storage):
         )
 
         outlier_settings = OutlierSettings(alpha=1, std_cutoff=0.05)
-        global_std_scaling = 1
 
         def progress_callback(_):
             return None
@@ -863,8 +867,13 @@ def test_that_autoscaling_applies_to_scaled_errors(storage):
             .to_list()
         )
 
-        assert scaled_errors_with_autoscale == [2, 6]
-        assert scaled_errors_without_autoscale == [1, 2]
+        np.testing.assert_allclose(
+            scaled_errors_with_autoscale, np.sqrt(global_std_scaling) * np.array([2, 6])
+        )
+        np.testing.assert_allclose(
+            scaled_errors_without_autoscale,
+            np.sqrt(global_std_scaling) * np.array([1, 2]),
+        )
 
 
 def test_that_autoscaling_saves_scaling_factors_to_posterior_ensemble(storage):
@@ -872,7 +881,7 @@ def test_that_autoscaling_saves_scaling_factors_to_posterior_ensemble(storage):
         misfit_main.return_value = (
             np.array([2, 3]),
             np.array([1, 1]),
-            np.array([1, 1]),
+            np.array([1.25, 1.75]),
         )
 
         observations_and_responses = pl.DataFrame(
@@ -897,7 +906,7 @@ def test_that_autoscaling_saves_scaling_factors_to_posterior_ensemble(storage):
         )
 
         def progress_callback(event):
-            if isinstance(event, AnalysisScalingEvent):
+            if isinstance(event, (AnalysisScalingEvent, AnalysisDataEvent)):
                 posterior_ensemble.save_blob(event)
 
         _mock_preprocess_observations_and_responses(
@@ -922,8 +931,138 @@ def test_that_autoscaling_saves_scaling_factors_to_posterior_ensemble(storage):
         assert scaling_factors["obs_key"].to_list() == ["obs1_1", "obs1_2"]
         assert scaling_factors["scaling_factor"].to_list() == [2.0, 3.0]
 
+        (table_blob,) = posterior_ensemble.load_blob_metadata(
+            BlobType.UPDATE_DATA_TABLE
+        )
+        table = pl.read_parquet(
+            io.BytesIO(posterior_ensemble.load_blob(table_blob.uri))
+        )
+        assert table_blob.blob_info.summary == {
+            "Method": "Participation-ratio Auto Scaling"
+        }
+        assert table["Cluster"].to_list() == [1, 1]
+        assert table["Effective rank"].to_list() == [1.25, 1.75]
+        assert table["Effective rank"].dtype == pl.Float64
+        assert table["Scaling factor"].to_list() == [2.0, 3.0]
+
         # Verify nothing was saved to the prior ensemble
         assert prior_ensemble.load_blob_metadata(BlobType.SCALING_FACTORS) == []
+        assert prior_ensemble.load_blob_metadata(BlobType.UPDATE_DATA_TABLE) == []
+
+
+@pytest.mark.parametrize("auto_scale", [False, True])
+def test_two_updates_recompute_autoscaling_from_current_responses(
+    storage, uniform_parameter, obs, auto_scale
+):
+    """Exercise two tempered updates with fresh responses and stored diagnostics."""
+    ensemble_size = 32
+    experiment = storage.create_experiment(
+        name="participation_rank",
+        experiment_config={
+            "parameter_configuration": [uniform_parameter],
+            "response_configuration": [
+                GenDataConfig(keys=["RESPONSE"]).model_dump(mode="json")
+            ],
+            "observations": obs,
+        },
+    )
+    prior = storage.create_ensemble(
+        experiment, name="prior", ensemble_size=ensemble_size
+    )
+    rng = np.random.default_rng(42)
+    prior.save_parameters(
+        pl.DataFrame(
+            {
+                "realization": np.arange(ensemble_size),
+                "KEY_1": rng.uniform(0, 1, ensemble_size),
+            }
+        )
+    )
+    factors_per_update = []
+    for iteration in range(2):
+        parameters = prior.load_parameters("PARAMETER").sort("realization")
+        values = parameters["KEY_1"].to_numpy()
+        responses = np.vstack([values, values + 0.2 * values**2, values**2]).astype(
+            np.float32
+        )
+        for iens in range(ensemble_size):
+            prior.save_response(
+                "gen_data",
+                pl.DataFrame(
+                    {
+                        "response_key": "RESPONSE",
+                        "report_step": pl.Series([0] * 3, dtype=pl.UInt16),
+                        "index": pl.Series(range(3), dtype=pl.UInt16),
+                        "values": responses[:, iens],
+                    }
+                ),
+                iens,
+            )
+        posterior = storage.create_ensemble(
+            experiment,
+            name=f"posterior_{iteration}",
+            ensemble_size=ensemble_size,
+            iteration=iteration + 1,
+            prior_ensemble=prior,
+        )
+        events = []
+
+        def progress_callback(event, events=events, posterior=posterior):
+            events.append(event)
+            if isinstance(event, (AnalysisDataEvent, AnalysisScalingEvent)):
+                posterior.save_blob(event)
+
+        snapshot = smoother_update(
+            prior,
+            posterior,
+            ["OBSERVATION"],
+            ObservationSettings(
+                auto_scale_observations=[["OBSERVATION"]] if auto_scale else []
+            ),
+            global_scaling=2.0,
+            rng=rng,
+            strategy_map=build_strategy_map(
+                parameters=["KEY_1"],
+                param_configs=experiment.parameter_configuration,
+                enkf_truncation=1.0,
+                correlation_threshold=lambda _: 1.0,
+            ),
+            progress_callback=progress_callback,
+        )
+
+        factors = np.ones(3)
+        reports = [event for event in events if isinstance(event, AnalysisDataEvent)]
+        if auto_scale:
+            (report,) = reports
+            data = np.asarray(report.data.data, dtype=object)
+            clusters = data[:, 2].astype(int)
+            ranks = data[:, 3].astype(float)
+            for cluster in np.unique(clusters):
+                members = np.flatnonzero(clusters == cluster)
+                correlation = np.atleast_2d(np.corrcoef(responses[members]))
+                gamma = np.sum(correlation**2) / len(members)
+                factors[members] = np.sqrt(gamma)
+                np.testing.assert_allclose(ranks[members], len(members) / gamma)
+            np.testing.assert_allclose(data[:, 4].astype(float), factors)
+            assert np.any(ranks > 1.0)
+            (table_blob,) = posterior.load_blob_metadata(BlobType.UPDATE_DATA_TABLE)
+            table = pl.read_parquet(io.BytesIO(posterior.load_blob(table_blob.uri)))
+            np.testing.assert_allclose(table["Effective rank"].to_numpy(), ranks)
+        else:
+            assert reports == []
+            assert posterior.load_blob_metadata(BlobType.SCALING_FACTORS) == []
+        factors_per_update.append(factors)
+        np.testing.assert_allclose(
+            snapshot.observations_and_responses["scaled_obs_error"].to_numpy(),
+            np.sqrt(2.0) * np.array([0.1, 1.0, 10.0]) * factors,
+        )
+        updated = posterior.load_parameters("PARAMETER").sort("realization")["KEY_1"]
+        assert np.isfinite(updated.to_numpy()).all()
+        assert not np.array_equal(updated.to_numpy(), values)
+        prior = posterior
+
+    if auto_scale:
+        assert not np.allclose(factors_per_update[0], factors_per_update[1])
 
 
 @pytest.mark.parametrize(
